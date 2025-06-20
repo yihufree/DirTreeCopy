@@ -6,7 +6,7 @@ import shutil
 class DirCopyApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("目录和文件及文件名复制工具   20250618  飞歌")
+        self.root.title("目录和文件复制及重命名工具   20250620  飞歌")
         
         # 设置窗口大小和位置
         window_width = 1056
@@ -45,7 +45,7 @@ class DirCopyApp:
         self.button_font = font.Font(family="TkDefaultFont", size=12, weight="bold")
         
         # 创建软件标题字体（二号字体约18磅）
-        self.title_font = font.Font(family="华文新魏", size=18, weight="bold")
+        self.title_font = font.Font(family="华文新魏", size=20, weight="bold")
         
         # 创建加粗标签字体
         self.bold_label_font = font.Font(family="TkDefaultFont", size=11, weight="bold")
@@ -53,7 +53,7 @@ class DirCopyApp:
         # 初始化变量
         self.source_dir = tk.StringVar()
         self.dest_dir = tk.StringVar()
-        self.copy_mode = tk.StringVar(value="single_level")
+        self.copy_mode = tk.StringVar(value="custom")
         self.export_format = tk.StringVar(value="txt")
         
         # 存储复选框状态
@@ -108,7 +108,7 @@ class DirCopyApp:
         ])
         
         # 软件标题
-        title_label = tk.Label(main_frame, text="目录和文件及文件名复制工具", 
+        title_label = tk.Label(main_frame, text="目录和文件复制及重命名工具", 
                               font=self.title_font, fg="#003366")
         title_label.grid(row=0, column=0, columnspan=4, pady=(0, 10))
         
@@ -125,12 +125,16 @@ class DirCopyApp:
         ttk.Button(main_frame, text="浏览", command=self.select_dest).grid(row=2, column=2, padx=5, pady=5)
         
         # 复制模式选择
-        mode_frame = ttk.LabelFrame(main_frame, text="复制模式", padding="5")
+        mode_frame = ttk.LabelFrame(main_frame, text="复制目录结构和导出文件名功能：", padding="5")
         mode_frame.grid(row=3, column=0, columnspan=3, sticky='ew', pady=10)
+        
+        # 设置LabelFrame标题颜色为蓝色，加粗
+        style.configure('Blue.TLabelframe.Label', foreground='blue', font=('TkDefaultFont', 11, 'bold'))
+        mode_frame.configure(style='Blue.TLabelframe')
         
         ttk.Radiobutton(mode_frame, text="仅复制一层目录", value="single_level", 
                        variable=self.copy_mode, command=self.on_mode_change).grid(row=0, column=0, padx=10)
-        ttk.Radiobutton(mode_frame, text="复制选定层级的目录", value="selected_levels",
+        ttk.Radiobutton(mode_frame, text="复制选定层级目录", value="selected_levels",
                        variable=self.copy_mode, command=self.on_mode_change).grid(row=0, column=1, padx=10)
         ttk.Radiobutton(mode_frame, text="复制所有层级目录", value="all_levels", 
                        variable=self.copy_mode, command=self.on_mode_change).grid(row=0, column=2, padx=10)
@@ -138,6 +142,9 @@ class DirCopyApp:
                        variable=self.copy_mode, command=self.on_mode_change).grid(row=0, column=3, padx=10)
         ttk.Radiobutton(mode_frame, text="导出目录和文件的名称", value="export_names", 
                        variable=self.copy_mode, command=self.on_mode_change).grid(row=0, column=4, padx=10)
+        files_only_radio = tk.Radiobutton(mode_frame, text="只显示文件", value="files_only", 
+                       variable=self.copy_mode, command=self.on_mode_change, foreground="red")
+        files_only_radio.grid(row=0, column=5, padx=10)
         
         # 导出格式选择框架
         self.export_format_frame = ttk.LabelFrame(main_frame, text="导出格式", padding="5")
@@ -157,8 +164,18 @@ class DirCopyApp:
         rename_frame = ttk.Frame(main_frame)
         rename_frame.grid(row=5, column=0, columnspan=3, sticky='ew', pady=5)
         
-        ttk.Button(rename_frame, text="重命名本级目录", command=self.rename_current_level).pack(side=tk.LEFT, padx=5)
-        ttk.Button(rename_frame, text="重命名所有目录", command=self.rename_all_items).pack(side=tk.LEFT, padx=5)
+        # 添加重命名功能标签（与框架标题字体大小一致，加粗，蓝色）
+        rename_label = tk.Label(rename_frame, text="重命名功能:", 
+                               font=font.Font(family="TkDefaultFont", size=11, weight="bold"), 
+                               fg="blue")
+        rename_label.pack(side=tk.LEFT, padx=(0, 10))
+        
+        ttk.Button(rename_frame, text="本级目录字符替换", command=self.rename_current_level).pack(side=tk.LEFT, padx=(0,5))
+        ttk.Button(rename_frame, text="全部目录字符替换", command=self.rename_all_items).pack(side=tk.LEFT, padx=5)
+        ttk.Button(rename_frame, text="多维重命名本级目录名", command=self.multi_rename_current_level).pack(side=tk.LEFT, padx=5)
+        ttk.Button(rename_frame, text="多维重命名本级文件名", command=self.multi_rename_current_files).pack(side=tk.LEFT, padx=5)
+        ttk.Button(rename_frame, text="全部目录名修改", command=self.advanced_rename_directories).pack(side=tk.LEFT, padx=5)
+        ttk.Button(rename_frame, text="全部文件名修改", command=self.advanced_rename_files).pack(side=tk.LEFT, padx=5)
         
         # 文件树视图
         tree_frame = ttk.Frame(main_frame)
@@ -216,7 +233,7 @@ class DirCopyApp:
         info_frame.grid(row=9, column=0, columnspan=4, sticky='ew', pady=5)
         
         # 左下角版本信息
-        version_label = tk.Label(info_frame, text="V1.0   2025/06/18", fg="blue", font=('TkDefaultFont', 9))
+        version_label = tk.Label(info_frame, text="V1.0   2025/06/20", fg="blue", font=('TkDefaultFont', 9))
         version_label.pack(side=tk.LEFT)
         
         # 右下角作者信息
@@ -341,7 +358,11 @@ class DirCopyApp:
                     
                     # 根据模式决定是否显示文件
                     mode = self.copy_mode.get()
-                    if mode not in ["custom", "export_names"] and not is_dir:
+                    if mode == "files_only":
+                        # 只显示文件模式：跳过目录，只显示文件
+                        if is_dir:
+                            continue
+                    elif mode not in ["custom", "export_names"] and not is_dir:
                         continue
                     
                     # 确定是否显示复选框
@@ -363,8 +384,8 @@ class DirCopyApp:
                     tag = 'oddrow' if row_count % 2 == 1 else 'evenrow'
                     self.tree.item(item_id, tags=(tag,))
                     
-                    # 如果是目录，递归添加子项
-                    if is_dir:
+                    # 如果是目录，递归添加子项（files_only模式下不递归）
+                    if is_dir and mode != "files_only":
                         self.add_directory_to_tree(item_id, full_path)
                         
                 except (PermissionError, OSError) as e:
@@ -690,7 +711,7 @@ class DirCopyApp:
             messagebox.showwarning("警告", "请先选择源目录!")
             return
             
-        dialog, find_var, replace_var = self.create_rename_dialog("重命名本级文件夹")
+        dialog, find_var, replace_var = self.create_rename_dialog("本级目录字符替换")
         
         def do_rename():
             find_text = find_var.get()
@@ -726,7 +747,7 @@ class DirCopyApp:
             messagebox.showwarning("警告", "请先选择源目录!")
             return
             
-        dialog, find_var, replace_var = self.create_rename_dialog("重命名所有项目")
+        dialog, find_var, replace_var = self.create_rename_dialog("全部目录字符替换")
         
         def do_rename():
             find_text = find_var.get()
@@ -761,6 +782,431 @@ class DirCopyApp:
                 messagebox.showerror("错误", f"重命名过程中出错:\n{str(e)}")
                 
         ttk.Button(dialog, text="确定", command=do_rename).pack(pady=10)
+
+    def multi_rename_current_level(self):
+        """批量重命名本级目录"""
+        if not self.source_dir.get():
+            messagebox.showwarning("警告", "请先选择源目录!")
+            return
+            
+        # 获取本级目录列表
+        source_path = self.source_dir.get()
+        directories = []
+        try:
+            for item in os.listdir(source_path):
+                full_path = os.path.join(source_path, item)
+                if os.path.isdir(full_path):
+                    directories.append(item)
+        except Exception as e:
+            messagebox.showerror("错误", f"无法读取目录: {str(e)}")
+            return
+            
+        if not directories:
+            messagebox.showinfo("提示", "当前目录下没有子目录!")
+            return
+            
+        self.create_multi_rename_dialog(directories)
+        
+    def multi_rename_current_files(self):
+        """批量重命名本级文件"""
+        if not self.source_dir.get():
+            messagebox.showwarning("警告", "请先选择源目录!")
+            return
+            
+        # 获取本级文件列表
+        source_path = self.source_dir.get()
+        files = []
+        try:
+            for item in os.listdir(source_path):
+                full_path = os.path.join(source_path, item)
+                if os.path.isfile(full_path):
+                    files.append(item)
+        except Exception as e:
+            messagebox.showerror("错误", f"无法读取目录: {str(e)}")
+            return
+            
+        if not files:
+            messagebox.showinfo("提示", "当前目录下没有文件!")
+            return
+            
+        self.create_multi_rename_file_dialog(files)
+        
+    def create_multi_rename_dialog(self, directories):
+        """创建批量重命名对话框"""
+        dialog = tk.Toplevel(self.root)
+        dialog.title("多维重命名本级目录名")
+        dialog.geometry("1000x300")
+        dialog.resizable(False, False)
+        
+        # 设置对话框位置：水平居中，距上边100像素
+        dialog.update_idletasks()  # 确保窗口尺寸已计算
+        screen_width = dialog.winfo_screenwidth()
+        dialog_width = 1000
+        x = (screen_width - dialog_width) // 2
+        y = 100
+        dialog.geometry(f"{dialog_width}x300+{x}+{y}")
+        
+        dialog.transient(self.root)
+        dialog.grab_set()
+        
+        main_frame = ttk.Frame(dialog, padding="10")
+        main_frame.pack(fill=tk.BOTH, expand=True)
+        
+        # 项目名称标签
+        title_frame = ttk.Frame(main_frame)
+        title_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        ttk.Label(title_frame, text="项目名称:", font=("TkDefaultFont", 10, "bold")).grid(row=0, column=0, sticky='w')
+        ttk.Label(title_frame, text="前序号").grid(row=0, column=1, padx=(10,30))
+        ttk.Label(title_frame, text="前连接符").grid(row=0, column=2, padx=30)
+        ttk.Label(title_frame, text="前缀字符").grid(row=0, column=3, padx=30)
+        ttk.Label(title_frame, text="原名称").grid(row=0, column=4, padx=(50,30))
+        ttk.Label(title_frame, text="后缀字符").grid(row=0, column=6, padx=40)
+        ttk.Label(title_frame, text="后连接符").grid(row=0, column=7, padx=20)
+        ttk.Label(title_frame, text="后序号").grid(row=0, column=8, padx=20)
+        
+        # 项目选择复选框
+        select_frame = ttk.Frame(main_frame)
+        select_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        ttk.Label(select_frame, text="项目选择:", font=("TkDefaultFont", 10, "bold")).grid(row=0, column=0, sticky='w')
+        
+        # 创建复选框变量
+        self.prefix_num_var = tk.BooleanVar()
+        self.prefix_conn_var = tk.BooleanVar()
+        self.prefix_text_var = tk.BooleanVar()
+        self.suffix_text_var = tk.BooleanVar()
+        self.suffix_conn_var = tk.BooleanVar()
+        self.suffix_num_var = tk.BooleanVar()
+        
+        ttk.Checkbutton(select_frame, text="前序号", variable=self.prefix_num_var).grid(row=0, column=1, padx=(10,20))
+        ttk.Checkbutton(select_frame, text="前连接符", variable=self.prefix_conn_var).grid(row=0, column=2, padx=(10,20))
+        ttk.Checkbutton(select_frame, text="前缀字符", variable=self.prefix_text_var).grid(row=0, column=3, padx=10)
+        ttk.Checkbutton(select_frame, text="后缀字符", variable=self.suffix_text_var).grid(row=0, column=6, padx=(180,20))
+        ttk.Checkbutton(select_frame, text="后连接符", variable=self.suffix_conn_var).grid(row=0, column=7, padx=20)
+        ttk.Checkbutton(select_frame, text="后序号", variable=self.suffix_num_var).grid(row=0, column=8, padx=10)
+        
+        # 目录新名输入框架
+        input_frame = ttk.Frame(main_frame)
+        input_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        ttk.Label(input_frame, text="目录新名:", font=("TkDefaultFont", 10, "bold")).grid(row=0, column=0, sticky='w')
+        
+        # 序号类型选项
+        num_options = ["1", "A", "a", "Ⅰ"]
+        self.prefix_num_combo = ttk.Combobox(input_frame, values=num_options, width=5, state="readonly")
+        self.prefix_num_combo.grid(row=0, column=1, padx=(10,20))
+        self.prefix_num_combo.set("1")
+        
+        # 连接符选项
+        conn_options = [".", "_", "-", "–", "—", "•"]
+        self.prefix_conn_combo = ttk.Combobox(input_frame, values=conn_options, width=5, state="readonly")
+        self.prefix_conn_combo.grid(row=0, column=2, padx=10)
+        self.prefix_conn_combo.set(".")
+        
+        # 前缀文本输入框
+        self.prefix_text_entry = ttk.Entry(input_frame, width=12)
+        self.prefix_text_entry.grid(row=0, column=3, padx=(20,10))
+        
+        # 添加说明文字
+        note_label = ttk.Label(input_frame, text="+ 目录原名称 +", font=("TkDefaultFont", 10))
+        note_label.grid(row=0, column=4, padx=0)
+        
+        # 后缀文本输入框
+        self.suffix_text_entry = ttk.Entry(input_frame, width=12)
+        self.suffix_text_entry.grid(row=0, column=6, padx=10)
+        
+        # 后连接符选项
+        self.suffix_conn_combo = ttk.Combobox(input_frame, values=conn_options, width=5, state="readonly")
+        self.suffix_conn_combo.grid(row=0, column=7, padx=20)
+        self.suffix_conn_combo.set(".")
+        
+        # 后序号类型选项
+        self.suffix_num_combo = ttk.Combobox(input_frame, values=num_options, width=5, state="readonly")
+        self.suffix_num_combo.grid(row=0, column=8, padx=10)
+        self.suffix_num_combo.set("1")
+        
+        # 按钮框架
+        button_frame = ttk.Frame(main_frame)
+        button_frame.pack(pady=20)
+        
+        def do_multi_rename():
+            try:
+                self.execute_multi_rename(directories)
+                dialog.destroy()
+            except Exception as e:
+                messagebox.showerror("错误", f"重命名过程中出错: {str(e)}")
+        
+        ttk.Button(button_frame, text="确定", command=do_multi_rename).pack(side=tk.LEFT, padx=10)
+        ttk.Button(button_frame, text="取消", command=dialog.destroy).pack(side=tk.LEFT, padx=10)
+        
+    def execute_multi_rename(self, directories):
+        """执行批量重命名"""
+        source_path = self.source_dir.get()
+        renamed_count = 0
+        
+        for i, dir_name in enumerate(directories):
+            new_name = dir_name
+            
+            # 构建新名称
+            prefix_parts = []
+            suffix_parts = []
+            
+            # 前序号
+            if self.prefix_num_var.get():
+                num_type = self.prefix_num_combo.get()
+                prefix_parts.append(self.generate_sequence_number(i + 1, num_type))
+            
+            # 前连接符
+            if self.prefix_conn_var.get():
+                prefix_parts.append(self.prefix_conn_combo.get())
+            
+            # 前缀字符
+            if self.prefix_text_var.get():
+                prefix_text = self.prefix_text_entry.get().strip()
+                if prefix_text:
+                    prefix_parts.append(prefix_text)
+            
+            # 后缀字符
+            if self.suffix_text_var.get():
+                suffix_text = self.suffix_text_entry.get().strip()
+                if suffix_text:
+                    suffix_parts.append(suffix_text)
+            
+            # 后连接符
+            if self.suffix_conn_var.get():
+                suffix_parts.append(self.suffix_conn_combo.get())
+            
+            # 后序号
+            if self.suffix_num_var.get():
+                num_type = self.suffix_num_combo.get()
+                suffix_parts.append(self.generate_sequence_number(i + 1, num_type))
+            
+            # 组合新名称
+            new_name = "".join(prefix_parts) + dir_name + "".join(suffix_parts)
+            
+            # 执行重命名
+            if new_name != dir_name:
+                old_path = os.path.join(source_path, dir_name)
+                new_path = os.path.join(source_path, new_name)
+                
+                # 检查新名称是否已存在
+                if os.path.exists(new_path):
+                    messagebox.showwarning("警告", f"目录 '{new_name}' 已存在，跳过重命名 '{dir_name}'")
+                    continue
+                
+                os.rename(old_path, new_path)
+                renamed_count += 1
+        
+        messagebox.showinfo("完成", f"批量重命名完成！共重命名 {renamed_count} 个目录。")
+        self.refresh_tree()
+        
+    def create_multi_rename_file_dialog(self, files):
+        """创建批量文件重命名对话框"""
+        dialog = tk.Toplevel(self.root)
+        dialog.title("多维重命名本级文件名")
+        dialog.geometry("1000x300")
+        dialog.resizable(False, False)
+        
+        # 设置对话框位置：水平居中，距上边100像素
+        dialog.update_idletasks()  # 确保窗口尺寸已计算
+        screen_width = dialog.winfo_screenwidth()
+        dialog_width = 1000
+        x = (screen_width - dialog_width) // 2
+        y = 100
+        dialog.geometry(f"{dialog_width}x300+{x}+{y}")
+        
+        dialog.transient(self.root)
+        dialog.grab_set()
+        
+        main_frame = ttk.Frame(dialog, padding="10")
+        main_frame.pack(fill=tk.BOTH, expand=True)
+        
+        # 项目名称标签
+        title_frame = ttk.Frame(main_frame)
+        title_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        ttk.Label(title_frame, text="项目名称:", font=("TkDefaultFont", 10, "bold")).grid(row=0, column=0, sticky='w')
+        ttk.Label(title_frame, text="前序号").grid(row=0, column=1, padx=(10,30))
+        ttk.Label(title_frame, text="前连接符").grid(row=0, column=2, padx=30)
+        ttk.Label(title_frame, text="前缀字符").grid(row=0, column=3, padx=30)
+        ttk.Label(title_frame, text="原名称").grid(row=0, column=4, padx=(50,30))
+        ttk.Label(title_frame, text="后缀字符").grid(row=0, column=6, padx=40)
+        ttk.Label(title_frame, text="后连接符").grid(row=0, column=7, padx=20)
+        ttk.Label(title_frame, text="后序号").grid(row=0, column=8, padx=20)
+        
+        # 项目选择复选框
+        select_frame = ttk.Frame(main_frame)
+        select_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        ttk.Label(select_frame, text="项目选择:", font=("TkDefaultFont", 10, "bold")).grid(row=0, column=0, sticky='w')
+        
+        # 创建复选框变量（文件重命名用）
+        self.file_prefix_num_var = tk.BooleanVar()
+        self.file_prefix_conn_var = tk.BooleanVar()
+        self.file_prefix_text_var = tk.BooleanVar()
+        self.file_suffix_text_var = tk.BooleanVar()
+        self.file_suffix_conn_var = tk.BooleanVar()
+        self.file_suffix_num_var = tk.BooleanVar()
+        
+        ttk.Checkbutton(select_frame, text="前序号", variable=self.file_prefix_num_var).grid(row=0, column=1, padx=(10,20))
+        ttk.Checkbutton(select_frame, text="前连接符", variable=self.file_prefix_conn_var).grid(row=0, column=2, padx=(10,20))
+        ttk.Checkbutton(select_frame, text="前缀字符", variable=self.file_prefix_text_var).grid(row=0, column=3, padx=10)
+        ttk.Checkbutton(select_frame, text="后缀字符", variable=self.file_suffix_text_var).grid(row=0, column=6, padx=(180,20))
+        ttk.Checkbutton(select_frame, text="后连接符", variable=self.file_suffix_conn_var).grid(row=0, column=7, padx=20)
+        ttk.Checkbutton(select_frame, text="后序号", variable=self.file_suffix_num_var).grid(row=0, column=8, padx=10)
+        
+        # 文件新名输入框架
+        input_frame = ttk.Frame(main_frame)
+        input_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        ttk.Label(input_frame, text="文件新名:", font=("TkDefaultFont", 10, "bold")).grid(row=0, column=0, sticky='w')
+        
+        # 序号类型选项
+        num_options = ["1", "A", "a", "Ⅰ"]
+        self.file_prefix_num_combo = ttk.Combobox(input_frame, values=num_options, width=5, state="readonly")
+        self.file_prefix_num_combo.grid(row=0, column=1, padx=(10,20))
+        self.file_prefix_num_combo.set("1")
+        
+        # 连接符选项
+        conn_options = [".", "_", "-", "–", "—", "•"]
+        self.file_prefix_conn_combo = ttk.Combobox(input_frame, values=conn_options, width=5, state="readonly")
+        self.file_prefix_conn_combo.grid(row=0, column=2, padx=10)
+        self.file_prefix_conn_combo.set(".")
+        
+        # 前缀文本输入框
+        self.file_prefix_text_entry = ttk.Entry(input_frame, width=12)
+        self.file_prefix_text_entry.grid(row=0, column=3, padx=(20,10))
+        
+        # 添加说明文字
+        note_label = ttk.Label(input_frame, text="+ 文件原名称 +", font=("TkDefaultFont", 10))
+        note_label.grid(row=0, column=4, padx=0)
+        
+        # 后缀文本输入框
+        self.file_suffix_text_entry = ttk.Entry(input_frame, width=12)
+        self.file_suffix_text_entry.grid(row=0, column=6, padx=10)
+        
+        # 后连接符选项
+        self.file_suffix_conn_combo = ttk.Combobox(input_frame, values=conn_options, width=5, state="readonly")
+        self.file_suffix_conn_combo.grid(row=0, column=7, padx=20)
+        self.file_suffix_conn_combo.set(".")
+        
+        # 后序号类型选项
+        self.file_suffix_num_combo = ttk.Combobox(input_frame, values=num_options, width=5, state="readonly")
+        self.file_suffix_num_combo.grid(row=0, column=8, padx=10)
+        self.file_suffix_num_combo.set("1")
+        
+        # 按钮框架
+        button_frame = ttk.Frame(main_frame)
+        button_frame.pack(pady=20)
+        
+        def do_multi_file_rename():
+            try:
+                self.execute_multi_file_rename(files)
+                dialog.destroy()
+            except Exception as e:
+                messagebox.showerror("错误", f"重命名过程中出错: {str(e)}")
+        
+        ttk.Button(button_frame, text="确定", command=do_multi_file_rename).pack(side=tk.LEFT, padx=10)
+        ttk.Button(button_frame, text="取消", command=dialog.destroy).pack(side=tk.LEFT, padx=10)
+        
+    def execute_multi_file_rename(self, files):
+        """执行批量文件重命名"""
+        source_path = self.source_dir.get()
+        renamed_count = 0
+        
+        for i, file_name in enumerate(files):
+            # 分离文件名和扩展名
+            name_part, ext_part = os.path.splitext(file_name)
+            
+            # 构建新名称
+            prefix_parts = []
+            suffix_parts = []
+            
+            # 前序号
+            if self.file_prefix_num_var.get():
+                num_type = self.file_prefix_num_combo.get()
+                prefix_parts.append(self.generate_sequence_number(i + 1, num_type))
+            
+            # 前连接符
+            if self.file_prefix_conn_var.get():
+                prefix_parts.append(self.file_prefix_conn_combo.get())
+            
+            # 前缀字符
+            if self.file_prefix_text_var.get():
+                prefix_text = self.file_prefix_text_entry.get().strip()
+                if prefix_text:
+                    prefix_parts.append(prefix_text)
+            
+            # 后缀字符
+            if self.file_suffix_text_var.get():
+                suffix_text = self.file_suffix_text_entry.get().strip()
+                if suffix_text:
+                    suffix_parts.append(suffix_text)
+            
+            # 后连接符
+            if self.file_suffix_conn_var.get():
+                suffix_parts.append(self.file_suffix_conn_combo.get())
+            
+            # 后序号
+            if self.file_suffix_num_var.get():
+                num_type = self.file_suffix_num_combo.get()
+                suffix_parts.append(self.generate_sequence_number(i + 1, num_type))
+            
+            # 组合新名称（保留原扩展名）
+            new_name = "".join(prefix_parts) + name_part + "".join(suffix_parts) + ext_part
+            
+            # 执行重命名
+            if new_name != file_name:
+                old_path = os.path.join(source_path, file_name)
+                new_path = os.path.join(source_path, new_name)
+                
+                # 检查新名称是否已存在
+                if os.path.exists(new_path):
+                    messagebox.showwarning("警告", f"文件 '{new_name}' 已存在，跳过重命名 '{file_name}'")
+                    continue
+                
+                os.rename(old_path, new_path)
+                renamed_count += 1
+        
+        messagebox.showinfo("完成", f"批量重命名完成！共重命名 {renamed_count} 个文件。")
+        self.refresh_tree()
+        
+    def generate_sequence_number(self, index, num_type):
+        """生成序列号"""
+        if num_type == "1":
+            return str(index)
+        elif num_type == "A":
+            # 大写字母序列 A, B, C, ..., Z, AA, AB, ...
+            result = ""
+            while index > 0:
+                index -= 1
+                result = chr(65 + index % 26) + result
+                index //= 26
+            return result
+        elif num_type == "a":
+            # 小写字母序列 a, b, c, ..., z, aa, ab, ...
+            result = ""
+            while index > 0:
+                index -= 1
+                result = chr(97 + index % 26) + result
+                index //= 26
+            return result
+        elif num_type == "Ⅰ":
+            # 罗马数字
+            roman_numerals = [
+                (1000, 'Ⅿ'), (900, 'ⅭⅯ'), (500, 'Ⅾ'), (400, 'ⅭⅮ'),
+                (100, 'Ⅽ'), (90, 'ⅩⅭ'), (50, 'Ⅼ'), (40, 'ⅩⅬ'),
+                (10, 'Ⅹ'), (9, 'Ⅸ'), (5, 'Ⅴ'), (4, 'Ⅳ'), (1, 'Ⅰ')
+            ]
+            result = ""
+            for value, numeral in roman_numerals:
+                count = index // value
+                result += numeral * count
+                index -= value * count
+            return result
+        else:
+            return str(index)
     
     def get_size_in_kb(self, path):
         """获取文件或目录的大小，单位为KB"""
@@ -790,6 +1236,314 @@ class DirCopyApp:
                 return "N/A"
         except (OSError, IOError):
             return "N/A"
+    
+    def advanced_rename_directories(self):
+        """全部目录名修改 - 支持通配符和正则表达式"""
+        if not self.source_dir.get():
+            messagebox.showwarning("警告", "请先选择源目录!")
+            return
+        
+        # 保存当前模式
+        original_mode = self.copy_mode.get()
+        # 临时切换到只显示目录的模式
+        self.copy_mode.set("single_level")
+        # 刷新树形视图以只显示目录
+        self.refresh_tree()
+        
+        # 创建对话框
+        self.create_advanced_rename_dialog("全部目录名修改", "directory")
+        
+        # 恢复原始模式
+        self.copy_mode.set(original_mode)
+        # 刷新树形视图恢复原始显示
+        self.refresh_tree()
+    
+    def advanced_rename_files(self):
+        """全部文件名修改 - 支持通配符和正则表达式"""
+        if not self.source_dir.get():
+            messagebox.showwarning("警告", "请先选择源目录!")
+            return
+        
+        # 保存当前模式
+        original_mode = self.copy_mode.get()
+        # 临时切换到显示文件的模式
+        self.copy_mode.set("export_names")
+        # 刷新树形视图以显示文件
+        self.refresh_tree()
+        
+        # 创建对话框
+        self.create_advanced_rename_dialog("全部文件名修改", "file")
+        
+        # 恢复原始模式
+        self.copy_mode.set(original_mode)
+        # 刷新树形视图恢复原始显示
+        self.refresh_tree()
+    
+    def create_advanced_rename_dialog(self, title, target_type):
+        """创建高级重命名对话框"""
+        dialog = tk.Toplevel(self.root)
+        dialog.title(title)
+        dialog.geometry("560x600")
+        dialog.resizable(False, False)
+        
+        # 设置对话框位置：水平居中，距上边100像素
+        dialog.update_idletasks()
+        screen_width = dialog.winfo_screenwidth()
+        dialog_width = 560
+        x = (screen_width - dialog_width) // 2
+        y = 100
+        dialog.geometry(f"{dialog_width}x600+{x}+{y}")
+        
+        dialog.transient(self.root)
+        dialog.grab_set()
+        
+        main_frame = ttk.Frame(dialog, padding="15")
+        main_frame.pack(fill=tk.BOTH, expand=True)
+        
+        # 标题
+        title_label = ttk.Label(main_frame, text=title, font=("TkDefaultFont", 12, "bold"))
+        title_label.pack(pady=(0, 15))
+        
+        # 匹配模式选择
+        mode_frame = ttk.LabelFrame(main_frame, text="匹配模式", padding="10")
+        mode_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        match_mode = tk.StringVar(value="exact")
+        ttk.Radiobutton(mode_frame, text="精确匹配", value="exact", variable=match_mode).grid(row=0, column=0, sticky='w', padx=(0, 20))
+        ttk.Radiobutton(mode_frame, text="通配符匹配", value="wildcard", variable=match_mode).grid(row=0, column=1, sticky='w', padx=(0, 20))
+        ttk.Radiobutton(mode_frame, text="正则表达式", value="regex", variable=match_mode).grid(row=0, column=2, sticky='w')
+        
+        # 说明文字
+        help_frame = ttk.Frame(main_frame)
+        help_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        help_text = (
+            "匹配模式说明:\n"
+            "• 精确匹配：完全匹配指定字符串\n"
+            "• 通配符匹配：支持 * (任意字符) 和 ? (单个字符)\n"
+            "• 正则表达式：支持完整的正则表达式语法"
+        )
+        help_label = ttk.Label(help_frame, text=help_text, font=("TkDefaultFont", 9), foreground="#666666")
+        help_label.pack(anchor='w')
+        
+        # 查找和替换输入
+        input_frame = ttk.LabelFrame(main_frame, text="查找和替换", padding="10")
+        input_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        ttk.Label(input_frame, text="查找模式:").grid(row=0, column=0, sticky='w', pady=(0, 5))
+        find_var = tk.StringVar()
+        find_entry = ttk.Entry(input_frame, textvariable=find_var, width=50)
+        find_entry.grid(row=1, column=0, sticky='ew', pady=(0, 10))
+        
+        ttk.Label(input_frame, text="替换为:").grid(row=2, column=0, sticky='w', pady=(0, 5))
+        replace_var = tk.StringVar()
+        replace_entry = ttk.Entry(input_frame, textvariable=replace_var, width=50)
+        replace_entry.grid(row=3, column=0, sticky='ew', pady=(0, 10))
+        
+        input_frame.grid_columnconfigure(0, weight=1)
+        
+        # 选项
+        options_frame = ttk.LabelFrame(main_frame, text="选项", padding="10")
+        options_frame.pack(fill=tk.X, pady=(0, 15))
+        
+        case_sensitive = tk.BooleanVar(value=True)
+        ttk.Checkbutton(options_frame, text="区分大小写", variable=case_sensitive).pack(anchor='w')
+        
+        preview_mode = tk.BooleanVar(value=False)
+        ttk.Checkbutton(options_frame, text="预览模式（仅显示将要修改的项目）", variable=preview_mode).pack(anchor='w')
+        
+        # 按钮
+        button_frame = ttk.Frame(main_frame)
+        button_frame.pack(fill=tk.X, pady=(20, 15))
+        
+        def do_advanced_rename():
+            find_pattern = find_var.get()
+            replace_text = replace_var.get()
+            mode = match_mode.get()
+            case_sens = case_sensitive.get()
+            preview = preview_mode.get()
+            
+            if not find_pattern:
+                messagebox.showwarning("警告", "请输入查找模式!")
+                return
+            
+            try:
+                self.execute_advanced_rename(find_pattern, replace_text, mode, case_sens, preview, target_type)
+                if not preview:
+                    dialog.destroy()
+                    self.refresh_tree()
+            except Exception as e:
+                messagebox.showerror("错误", f"操作过程中出错:\n{str(e)}")
+        
+        # 创建按钮并居中显示
+        button_container = ttk.Frame(button_frame)
+        button_container.pack(anchor='center')
+        
+        ttk.Button(button_container, text="执行", command=do_advanced_rename).pack(side=tk.LEFT, padx=(0, 10))
+        ttk.Button(button_container, text="取消", command=dialog.destroy).pack(side=tk.LEFT)
+    
+    def execute_advanced_rename(self, find_pattern, replace_text, mode, case_sensitive, preview_mode, target_type):
+        """执行高级重命名操作"""
+        import re
+        import fnmatch
+        
+        renamed_items = []
+        preview_items = []
+        
+        def process_directory(path):
+            try:
+                items = os.listdir(path)
+                for item in items:
+                    full_path = os.path.join(path, item)
+                    is_dir = os.path.isdir(full_path)
+                    
+                    # 根据目标类型过滤
+                    if target_type == "directory" and not is_dir:
+                        continue
+                    elif target_type == "file" and is_dir:
+                        # 对于文件模式，仍需要递归处理目录
+                        if is_dir:
+                            process_directory(full_path)
+                        continue
+                    
+                    # 匹配检查
+                    match_found = False
+                    new_name = item
+                    
+                    if mode == "exact":
+                        if case_sensitive:
+                            match_found = find_pattern in item
+                            new_name = item.replace(find_pattern, replace_text)
+                        else:
+                            match_found = find_pattern.lower() in item.lower()
+                            # 大小写不敏感的替换
+                            import re
+                            new_name = re.sub(re.escape(find_pattern), replace_text, item, flags=re.IGNORECASE)
+                    
+                    elif mode == "wildcard":
+                        # 将通配符模式转换为正则表达式进行匹配和替换
+                        import re
+                        
+                        # 转换通配符为正则表达式
+                        regex_pattern = find_pattern.replace('*', '.*').replace('?', '.')
+                        
+                        try:
+                            flags = 0 if case_sensitive else re.IGNORECASE
+                            if re.search(regex_pattern, item, flags):
+                                match_found = True
+                                # 使用正则表达式进行替换
+                                new_name = re.sub(regex_pattern, replace_text, item, flags=flags)
+                        except re.error:
+                            # 如果正则表达式转换失败，回退到简单匹配
+                            if case_sensitive:
+                                match_found = fnmatch.fnmatch(item, find_pattern)
+                            else:
+                                match_found = fnmatch.fnmatch(item.lower(), find_pattern.lower())
+                            
+                            if match_found:
+                                new_name = item.replace(find_pattern, replace_text)
+                    
+                    elif mode == "regex":
+                        try:
+                            flags = 0 if case_sensitive else re.IGNORECASE
+                            if re.search(find_pattern, item, flags):
+                                match_found = True
+                                new_name = re.sub(find_pattern, replace_text, item, flags=flags)
+                        except re.error as e:
+                            raise Exception(f"正则表达式错误: {str(e)}")
+                    
+                    if match_found and new_name != item:
+                        if preview_mode:
+                            preview_items.append({
+                                'path': full_path,
+                                'old_name': item,
+                                'new_name': new_name,
+                                'type': '目录' if is_dir else '文件'
+                            })
+                        else:
+                            # 检查新名称是否已存在
+                            new_path = os.path.join(path, new_name)
+                            if not os.path.exists(new_path):
+                                os.rename(full_path, new_path)
+                                renamed_items.append(item)
+                                full_path = new_path  # 更新路径用于递归
+                            else:
+                                print(f"跳过 {item}：目标名称 {new_name} 已存在")
+                    
+                    # 递归处理子目录
+                    if is_dir:
+                        process_directory(full_path)
+                        
+            except (PermissionError, OSError) as e:
+                print(f"无法访问目录 {path}: {str(e)}")
+        
+        # 开始处理
+        process_directory(self.source_dir.get())
+        
+        if preview_mode:
+            if preview_items:
+                self.show_preview_dialog(preview_items)
+            else:
+                messagebox.showinfo("预览结果", "没有找到匹配的项目。")
+        else:
+            count = len(renamed_items)
+            type_name = "目录" if target_type == "directory" else "文件"
+            messagebox.showinfo("完成", f"重命名完成！共重命名 {count} 个{type_name}。")
+    
+    def show_preview_dialog(self, preview_items):
+        """显示预览对话框"""
+        preview_dialog = tk.Toplevel(self.root)
+        preview_dialog.title("预览重命名结果")
+        preview_dialog.geometry("700x400")
+        
+        # 设置对话框位置
+        preview_dialog.update_idletasks()
+        screen_width = preview_dialog.winfo_screenwidth()
+        dialog_width = 700
+        x = (screen_width - dialog_width) // 2
+        y = 80
+        preview_dialog.geometry(f"{dialog_width}x400+{x}+{y}")
+        
+        preview_dialog.transient(self.root)
+        preview_dialog.grab_set()
+        
+        main_frame = ttk.Frame(preview_dialog, padding="10")
+        main_frame.pack(fill=tk.BOTH, expand=True)
+        
+        # 标题
+        title_label = ttk.Label(main_frame, text=f"将要重命名的项目 (共 {len(preview_items)} 个)", 
+                               font=("TkDefaultFont", 11, "bold"))
+        title_label.pack(pady=(0, 10))
+        
+        # 创建树形视图显示预览结果
+        tree_frame = ttk.Frame(main_frame)
+        tree_frame.pack(fill=tk.BOTH, expand=True)
+        
+        preview_tree = ttk.Treeview(tree_frame, columns=("type", "old_name", "new_name"), show="headings")
+        preview_tree.heading("type", text="类型")
+        preview_tree.heading("old_name", text="原名称")
+        preview_tree.heading("new_name", text="新名称")
+        
+        preview_tree.column("type", width=80)
+        preview_tree.column("old_name", width=250)
+        preview_tree.column("new_name", width=250)
+        
+        # 添加滚动条
+        v_scrollbar = ttk.Scrollbar(tree_frame, orient="vertical", command=preview_tree.yview)
+        preview_tree.configure(yscrollcommand=v_scrollbar.set)
+        
+        preview_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        v_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        # 填充数据
+        for item in preview_items:
+            preview_tree.insert("", "end", values=(item['type'], item['old_name'], item['new_name']))
+        
+        # 按钮
+        button_frame = ttk.Frame(main_frame)
+        button_frame.pack(fill=tk.X, pady=(10, 0))
+        
+        ttk.Button(button_frame, text="关闭", command=preview_dialog.destroy).pack(side=tk.RIGHT)
 
 def main():
     root = tk.Tk()
