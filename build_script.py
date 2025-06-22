@@ -16,7 +16,7 @@ def build_exe():
     
     params = [
         'main_app.py',
-        '--name=DirCopyTool_250620_V1.1',
+        '--name=DirCopyTool_250622_V1.1',
         '--noconsole',
         '--onefile',
         '--clean',
