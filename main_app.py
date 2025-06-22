@@ -6,10 +6,10 @@ import shutil
 class DirCopyApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("目录和文件复制及重命名工具   20250620  飞歌")
+        self.root.title("目录和文件复制及重命名工具   20250622  飞歌")
         
         # 设置窗口大小和位置
-        window_width = 1056
+        window_width = 1180
         window_height = 650
         
         # 获取屏幕尺寸
@@ -233,7 +233,7 @@ class DirCopyApp:
         info_frame.grid(row=9, column=0, columnspan=4, sticky='ew', pady=5)
         
         # 左下角版本信息
-        version_label = tk.Label(info_frame, text="V1.0   2025/06/20", fg="blue", font=('TkDefaultFont', 9))
+        version_label = tk.Label(info_frame, text="V1.0   2025/06/22", fg="blue", font=('TkDefaultFont', 9))
         version_label.pack(side=tk.LEFT)
         
         # 右下角作者信息
@@ -1283,7 +1283,7 @@ class DirCopyApp:
         """创建高级重命名对话框"""
         dialog = tk.Toplevel(self.root)
         dialog.title(title)
-        dialog.geometry("560x600")
+        dialog.geometry("560x640")  # 增加高度从600到650
         dialog.resizable(False, False)
         
         # 设置对话框位置：水平居中，距上边100像素
@@ -1292,7 +1292,7 @@ class DirCopyApp:
         dialog_width = 560
         x = (screen_width - dialog_width) // 2
         y = 100
-        dialog.geometry(f"{dialog_width}x600+{x}+{y}")
+        dialog.geometry(f"{dialog_width}x650+{x}+{y}")  # 增加高度从600到650
         
         dialog.transient(self.root)
         dialog.grab_set()
@@ -1354,7 +1354,7 @@ class DirCopyApp:
         
         # 按钮
         button_frame = ttk.Frame(main_frame)
-        button_frame.pack(fill=tk.X, pady=(20, 15))
+        button_frame.pack(fill=tk.X, pady=(20, 0), side=tk.BOTTOM)  # 确保按钮在底部显示
         
         def do_advanced_rename():
             find_pattern = find_var.get()
