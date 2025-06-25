@@ -7,7 +7,7 @@ from operation_history import OperationHistory
 class DirCopyApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("目录和文件复制及重命名工具   20250624  飞歌")
+        self.root.title("目录和文件复制及重命名工具   20250625  飞歌")
         
         # 获取屏幕尺寸
         screen_width = root.winfo_screenwidth()
@@ -250,7 +250,7 @@ class DirCopyApp:
         help_text.configure(yscrollcommand=scrollbar.set)
         
         help_content = """【软件功能概述】
-本工具是一个功能强大的目录和文件管理工具，主要用于目录结构复制、文件批量重命名、导出操作和操作历史管理。支持多种复制模式、智能重命名和完善的撤销/重做功能。
+本工具是一个功能强大的目录和文件管理工具，主要用于目录结构复制、文件批量重命名、多格式导出操作和操作历史管理。支持多种复制模式、智能重命名、7种导出格式和完善的撤销/重做功能。
 
 【主要功能模块】
 
@@ -270,11 +270,22 @@ class DirCopyApp:
    • 仅复制目录：只复制目录结构，不复制文件内容
    • 仅复制文件：只复制文件，不创建目录结构
 
-3. 【导出功能】
-   • 导出目录文件名称：生成目录结构文档
-   • 支持格式：TXT（纯文本树形结构）、HTML（网页格式，支持折叠展开）、Markdown（适合文档编写）
-   • 自动命名：基于当前时间戳和源目录名生成文件名
+3. 【多格式导出功能】（7种格式）
+   • 导出目录文件名称：生成目录结构文档，支持7种不同格式
+   
+   格式详细说明：
+   ① TXT格式：纯文本树形结构，简洁清晰，适合快速查看
+   ② HTML格式：网页格式，支持折叠展开，美观易读
+   ③ HTML格式(含链接)：在HTML基础上添加可点击链接，直接打开文件
+   ④ Markdown格式：适合文档编写和版本控制，支持GitHub等平台
+   ⑤ Markdown(含链接)：在Markdown基础上添加文件链接功能
+   ⑥ DOCX格式：Microsoft Word文档格式，专业文档输出
+   ⑦ DOCX格式(含链接)：Word文档格式，支持真正的超链接，可直接点击打开文件
+   
+   • 自动命名：基于当前时间戳和源目录名生成文件名（格式：时间戳_目录名_目录结构.扩展名）
    • 结构化输出：包含完整的层级关系和文件信息
+   • 链接功能：支持file://协议的本地文件链接，兼容中文路径
+   • 格式化支持：DOCX格式支持居中标题、右对齐时间戳、分层缩进
 
 4. 【批量重命名功能】
    • 字符替换重命名：
@@ -318,11 +329,21 @@ class DirCopyApp:
    ⑤ 点击"开始复制"按钮执行操作
    ⑥ 查看操作结果和完成提示
 
-2. 导出名称流程：
-   ① 选择源目录
-   ② 选择导出格式（TXT/HTML/MD）
-   ③ 点击"开始复制"按钮
-   ④ 系统自动生成并保存导出文件
+2. 多格式导出流程：
+   ① 选择源目录（点击"浏览"按钮）
+   ② 选择目标目录（导出文件保存位置）
+   ③ 选择"导出目录和文件的名称"模式
+   ④ 选择导出格式（7种格式可选）：
+      • TXT格式：纯文本树形结构
+      • HTML格式：网页格式，支持折叠展开
+      • HTML格式(含链接)：可点击链接直接打开文件
+      • Markdown格式：适合文档编写
+      • Markdown(含链接)：支持文件链接的Markdown
+      • DOCX格式：Word文档格式
+      • DOCX格式(含链接)：支持真正超链接的Word文档
+   ⑤ 点击"开始复制"按钮执行导出
+   ⑥ 系统自动生成并保存导出文件到目标目录
+   ⑦ 查看导出成功提示和文件位置
 
 3. 重命名流程：
    ① 选择源目录
@@ -339,10 +360,13 @@ class DirCopyApp:
 • 操作历史功能提供安全保障，可以撤销错误操作
 • 复制大量文件时请耐心等待，系统会显示处理进度
 • 目标目录如果已存在同名文件，系统会智能处理冲突
-• 导出名称列表功能支持三种格式：TXT、HTML、Markdown
+• 导出功能支持7种格式：TXT、HTML、HTML(含链接)、Markdown、Markdown(含链接)、DOCX、DOCX(含链接)
+• DOCX格式需要python-docx库支持，如未安装会自动提示安装命令
+• 链接版本的导出格式支持直接点击打开文件，适合制作可交互的目录文档
 • 高级重命名支持预览功能，建议先预览再执行
-• 程序会自动处理中文路径和特殊字符
+• 程序会自动处理中文路径和特殊字符，支持Unicode文件名
 • 操作过程中如遇到权限问题，会给出明确提示
+• DOCX格式的超链接功能使用file://协议，兼容Windows资源管理器
 
 【快捷操作技巧】
 
@@ -377,14 +401,27 @@ class DirCopyApp:
 • 安全机制：操作前验证，操作后备份
 • 界面友好：直观的操作流程和状态反馈
 • 跨平台：基于Python tkinter，支持Windows系统
+• 多格式支持：7种导出格式，满足不同使用场景
+• 超链接技术：DOCX格式使用底层XML API实现真正的可点击超链接
+• 文件URI转换：支持本地文件路径转换为file://协议，兼容中文路径
+• 依赖管理：自动检测python-docx库，缺失时提供安装指导
+• 代码隔离：新功能完全独立，不影响原有功能稳定性
 
-版本：V1.1
-开发日期：2025/06/24
-更新日期：2025/06/24
+版本：V1.2
+开发日期：2025/02/24
+更新日期：2025/06/25
 作者：飞歌
 
 【版本更新说明】
-V1.1 新增功能：
+V1.2 新增功能：
+• 7种导出格式支持：TXT、HTML、HTML(含链接)、Markdown、Markdown(含链接)、DOCX、DOCX(含链接)
+• DOCX格式真正超链接功能：使用底层XML API实现可点击的文件链接
+• 文件URI转换技术：支持file://协议，兼容中文路径
+• UI界面优化：导出格式选项单行紧凑布局
+• 依赖管理增强：自动检测python-docx库并提供安装指导
+• 代码隔离设计：新功能完全独立，确保原有功能稳定性
+
+V1.1 功能：
 • 完善的操作历史管理系统
 • 智能撤销/重做功能
 • 高级重命名预览功能
@@ -476,12 +513,21 @@ V1.1 新增功能：
         self.export_format_frame = ttk.LabelFrame(main_frame, text="导出格式", padding="5")
         self.export_format_frame.grid(row=4, column=0, columnspan=3, sticky='ew', pady=5)
         
+        # 将所有导出格式选项放在一行，缩小间距
         ttk.Radiobutton(self.export_format_frame, text="TXT格式", value="txt", 
-                       variable=self.export_format).grid(row=0, column=0, padx=10)
+                       variable=self.export_format).grid(row=0, column=0, padx=5)
         ttk.Radiobutton(self.export_format_frame, text="HTML格式", value="html", 
-                       variable=self.export_format).grid(row=0, column=1, padx=10)
+                       variable=self.export_format).grid(row=0, column=1, padx=5)
+        ttk.Radiobutton(self.export_format_frame, text="HTML格式(含链接)", value="html_link", 
+                       variable=self.export_format).grid(row=0, column=2, padx=5)
         ttk.Radiobutton(self.export_format_frame, text="Markdown格式", value="md", 
-                       variable=self.export_format).grid(row=0, column=2, padx=10)
+                       variable=self.export_format).grid(row=0, column=3, padx=5)
+        ttk.Radiobutton(self.export_format_frame, text="Markdown(含链接)", value="md_link", 
+                       variable=self.export_format).grid(row=0, column=4, padx=5)
+        ttk.Radiobutton(self.export_format_frame, text="DOCX格式", value="docx", 
+                       variable=self.export_format).grid(row=0, column=5, padx=5)
+        ttk.Radiobutton(self.export_format_frame, text="DOCX格式(含链接)", value="docx_link", 
+                       variable=self.export_format).grid(row=0, column=6, padx=5)
         
         # 初始隐藏导出格式选择
         self.export_format_frame.grid_remove()
@@ -582,7 +628,7 @@ V1.1 新增功能：
         info_frame.grid(row=9, column=0, columnspan=4, sticky='ew', pady=5)
         
         # 左下角版本信息
-        version_label = tk.Label(info_frame, text="V1.1   2025/06/24", fg="blue", font=('TkDefaultFont', 9))
+        version_label = tk.Label(info_frame, text="V1.2   2025/06/25", fg="blue", font=('TkDefaultFont', 9))
         version_label.pack(side=tk.LEFT)
         
         # 右下角作者信息
@@ -827,6 +873,62 @@ V1.1 新增功能：
                     'is_directory': True
                 })
             
+    def collect_structure_with_path(self, path, structure_data, level, root_path):
+        """递归收集目录结构信息（包含完整路径）"""
+        try:
+            # 检查路径是否可访问
+            if not os.access(path, os.R_OK):
+                structure_data.append({
+                    'name': f"[无法访问: {os.path.basename(path)}]",
+                    'level': level,
+                    'is_dir': False,
+                    'full_path': path
+                })
+                return
+                
+            items = sorted(os.listdir(path))
+            for item in items:
+                full_path = os.path.join(path, item)
+                
+                try:
+                    # 检查单个项目是否可访问
+                    is_dir = os.path.isdir(full_path)
+                    structure_data.append({
+                        'name': item,
+                        'level': level,
+                        'is_dir': is_dir,
+                        'full_path': full_path
+                    })
+                    
+                    if is_dir:
+                        self.collect_structure_with_path(full_path, structure_data, level + 1, root_path)
+                        
+                except (PermissionError, OSError):
+                    # 单个文件/目录访问失败，添加提示信息但继续处理
+                    structure_data.append({
+                        'name': f"[无法访问: {item}]",
+                        'level': level,
+                        'is_dir': False,
+                        'full_path': full_path
+                    })
+                    
+        except (PermissionError, OSError):
+            # 整个目录访问失败
+            structure_data.append({
+                'name': f"[无法访问: {os.path.basename(path)}]",
+                'level': level,
+                'is_dir': False,
+                'full_path': path
+            })
+        except Exception as e:
+            # 其他未预期的错误
+            structure_data.append({
+                'name': f"[错误: {os.path.basename(path)} - {str(e)}]",
+                'level': level,
+                'is_dir': False,
+                'full_path': path
+            })
+            
             self.root.update()
         
         # 更新历史按钮状态
@@ -969,20 +1071,41 @@ V1.1 新增功能：
         from datetime import datetime
         current_time = datetime.now().strftime("%Y%m%d_%H%M%S")
         source_name = os.path.basename(src)
-        filename = f"{current_time}_{source_name}_目录结构.{export_format}"
+        
+        # 根据格式确定文件扩展名
+        if export_format in ["html", "html_link"]:
+            file_ext = "html"
+        elif export_format in ["md", "md_link"]:
+            file_ext = "md"
+        elif export_format in ["docx", "docx_link"]:
+            file_ext = "docx"
+        else:
+            file_ext = export_format
+            
+        filename = f"{current_time}_{source_name}_目录结构.{file_ext}"
         output_path = os.path.join(dst, filename)
         
-        # 收集目录结构信息
+        # 收集目录结构信息（含完整路径）
         structure_data = []
-        self.collect_structure(src, structure_data, 0)
+        self.collect_structure_with_path(src, structure_data, 0, src)
         
         # 根据格式生成内容
         if export_format == "txt":
             content = self.generate_txt_content(structure_data, source_name)
         elif export_format == "html":
             content = self.generate_html_content(structure_data, source_name)
+        elif export_format == "html_link":
+            content = self.generate_html_content_with_links(structure_data, source_name)
         elif export_format == "md":
             content = self.generate_md_content(structure_data, source_name)
+        elif export_format == "md_link":
+            content = self.generate_md_content_with_links(structure_data, source_name)
+        elif export_format == "docx":
+            self.generate_docx_content(structure_data, source_name, output_path)
+            return  # DOCX直接写入文件，不需要后续的文本写入操作
+        elif export_format == "docx_link":
+            self.generate_docx_content_with_links(structure_data, source_name, output_path)
+            return  # DOCX直接写入文件，不需要后续的文本写入操作
         
         # 写入文件
         with open(output_path, 'w', encoding='utf-8') as f:
@@ -1109,6 +1232,236 @@ V1.1 新增功能：
         
         return "\n".join(lines)
         
+    def generate_html_content_with_links(self, structure_data, source_name):
+        """生成HTML格式内容（含硬链接）"""
+        lines = []
+        lines.append("<!DOCTYPE html>")
+        lines.append("<html lang='zh-CN'>")
+        lines.append("<head>")
+        lines.append("    <meta charset='UTF-8'>")
+        lines.append("    <meta name='viewport' content='width=device-width, initial-scale=1.0'>")
+        lines.append(f"    <title>目录结构(含链接) - {source_name}</title>")
+        lines.append("    <style>")
+        lines.append("        body { font-family: 'Microsoft YaHei', Arial, sans-serif; margin: 20px; }")
+        lines.append("        h1 { color: #333; border-bottom: 2px solid #007acc; padding-bottom: 10px; }")
+        lines.append("        .tree { font-family: 'Courier New', monospace; line-height: 1.6; }")
+        lines.append("        .folder { color: #007acc; font-weight: bold; }")
+        lines.append("        .file { color: #666; }")
+        lines.append("        .folder a, .file a { text-decoration: none; color: inherit; }")
+        lines.append("        .folder a:hover, .file a:hover { text-decoration: underline; }")
+        lines.append("        .indent { margin-left: 20px; }")
+        lines.append("    </style>")
+        lines.append("</head>")
+        lines.append("<body>")
+        lines.append(f"    <h1>目录结构(含链接) - {source_name}</h1>")
+        lines.append("    <div class='tree'>")
+        
+        for item in structure_data:
+            indent_class = f"indent" if item['level'] > 0 else ""
+            style_class = "folder" if item['is_dir'] else "file"
+            icon = "📁" if item['is_dir'] else "📄"
+            
+            # 生成文件URI（硬链接）
+            file_uri = self.path_to_file_uri(item['full_path'])
+            
+            indent_style = f"margin-left: {item['level'] * 20}px;"
+            lines.append(f"        <div class='{style_class}' style='{indent_style}'>{icon} <a href='{file_uri}'>{item['name']}</a></div>")
+            
+        lines.append("    </div>")
+        lines.append(f"    <p><em>导出时间: {self.get_current_time()}</em></p>")
+        lines.append("</body>")
+        lines.append("</html>")
+        
+        return "\n".join(lines)
+        
+    def generate_md_content_with_links(self, structure_data, source_name):
+        """生成Markdown格式内容（含硬链接）"""
+        lines = []
+        lines.append(f"# 目录结构(含链接) - {source_name}")
+        lines.append("")
+        lines.append("```")
+        
+        for item in structure_data:
+            indent = "  " * item['level']
+            prefix = "📁 " if item['is_dir'] else "📄 "
+            
+            # 生成文件URI（硬链接）
+            file_uri = self.path_to_file_uri(item['full_path'])
+            
+            # Markdown链接格式
+            lines.append(f"{indent}{prefix}[{item['name']}]({file_uri})")
+            
+        lines.append("```")
+        lines.append("")
+        lines.append(f"*导出时间: {self.get_current_time()}*")
+        
+        return "\n".join(lines)
+        
+    def path_to_file_uri(self, file_path):
+        """将文件路径转换为file:// URI格式（硬链接）"""
+        import urllib.parse
+        
+        # 规范化路径
+        normalized_path = os.path.abspath(file_path)
+        
+        # 在Windows系统中，需要特殊处理路径格式
+        if os.name == 'nt':  # Windows
+            # 将反斜杠转换为正斜杠
+            normalized_path = normalized_path.replace('\\', '/')
+            # 确保以斜杠开头
+            if not normalized_path.startswith('/'):
+                normalized_path = '/' + normalized_path
+        
+        # URL编码路径中的特殊字符（保持中文字符可读性）
+        encoded_path = urllib.parse.quote(normalized_path, safe='/:@!$&\'()*+,;=')
+        
+        return f"file://{encoded_path}"
+        
+    def generate_docx_content(self, structure_data, source_name, output_path):
+        """生成DOCX格式内容"""
+        try:
+            from docx import Document
+            from docx.shared import Inches
+            from docx.enum.text import WD_ALIGN_PARAGRAPH
+            
+            # 创建新文档
+            doc = Document()
+            
+            # 添加标题
+            title = doc.add_heading(f'目录结构 - {source_name}', 0)
+            title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            
+            # 添加导出时间
+            time_para = doc.add_paragraph(f'导出时间: {self.get_current_time()}')
+            time_para.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+            
+            # 添加空行
+            doc.add_paragraph()
+            
+            # 添加目录结构内容
+            for item in structure_data:
+                # 创建段落
+                para = doc.add_paragraph()
+                
+                # 添加缩进
+                para.paragraph_format.left_indent = Inches(item['level'] * 0.3)
+                
+                # 添加图标和文件名
+                icon = "📁 " if item['is_dir'] else "📄 "
+                para.add_run(f"{icon}{item['name']}")
+                
+            # 保存文档
+            doc.save(output_path)
+            
+            # 显示成功消息
+            messagebox.showinfo("导出成功", f"目录结构已导出到:\n{output_path}")
+            
+        except ImportError:
+            messagebox.showerror("错误", "缺少python-docx库，请先安装:\npip install python-docx")
+        except Exception as e:
+            messagebox.showerror("导出失败", f"导出DOCX文件时发生错误:\n{str(e)}")
+            
+    def generate_docx_content_with_links(self, structure_data, source_name, output_path):
+        """生成DOCX格式内容（含硬链接）"""
+        try:
+            from docx import Document
+            from docx.shared import Inches, RGBColor
+            from docx.enum.text import WD_ALIGN_PARAGRAPH
+            from docx.oxml.shared import OxmlElement, qn
+            
+            # 创建新文档
+            doc = Document()
+            
+            # 添加标题
+            title = doc.add_heading(f'目录结构(含链接) - {source_name}', 0)
+            title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            
+            # 添加导出时间
+            time_para = doc.add_paragraph(f'导出时间: {self.get_current_time()}')
+            time_para.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+            
+            # 添加空行
+            doc.add_paragraph()
+            
+            # 添加目录结构内容
+            for item in structure_data:
+                # 创建段落
+                para = doc.add_paragraph()
+                
+                # 添加缩进
+                para.paragraph_format.left_indent = Inches(item['level'] * 0.3)
+                
+                # 添加图标
+                icon = "📁 " if item['is_dir'] else "📄 "
+                para.add_run(icon)
+                
+                # 生成文件URI（硬链接）
+                file_uri = self.path_to_file_uri(item['full_path'])
+                
+                # 添加超链接
+                try:
+                    # 使用python-docx的内置超链接功能
+                    hyperlink_run = para.add_run(item['name'])
+                    
+                    # 创建超链接关系
+                    part = para.part
+                    r_id = part.relate_to(file_uri, "http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink", is_external=True)
+                    
+                    # 创建超链接XML元素
+                    hyperlink = OxmlElement('w:hyperlink')
+                    hyperlink.set(qn('r:id'), r_id)
+                    
+                    # 创建运行元素
+                    new_run = OxmlElement('w:r')
+                    
+                    # 设置运行属性（蓝色、下划线）
+                    rPr = OxmlElement('w:rPr')
+                    color = OxmlElement('w:color')
+                    color.set(qn('w:val'), '0000FF')
+                    rPr.append(color)
+                    
+                    u = OxmlElement('w:u')
+                    u.set(qn('w:val'), 'single')
+                    rPr.append(u)
+                    
+                    new_run.append(rPr)
+                    
+                    # 添加文本
+                    text_elem = OxmlElement('w:t')
+                    text_elem.text = item['name']
+                    new_run.append(text_elem)
+                    
+                    hyperlink.append(new_run)
+                    
+                    # 移除之前添加的普通文本运行
+                    para._element.remove(hyperlink_run._element)
+                    
+                    # 添加超链接到段落
+                    para._element.append(hyperlink)
+                    
+                except Exception as link_error:
+                    # 如果超链接创建失败，回退到普通文本
+                    print(f"创建超链接失败: {link_error}")
+                    hyperlink_run = para.add_run(item['name'])
+                    hyperlink_run.font.color.rgb = RGBColor(0, 0, 255)  # 蓝色
+                    hyperlink_run.font.underline = True
+                
+            # 添加说明
+            doc.add_paragraph()
+            note_para = doc.add_paragraph('说明：点击文件名可以直接打开对应的文件或文件夹。')
+            note_para.italic = True
+            
+            # 保存文档
+            doc.save(output_path)
+            
+            # 显示成功消息
+            messagebox.showinfo("导出成功", f"目录结构(含链接)已导出到:\n{output_path}")
+            
+        except ImportError:
+            messagebox.showerror("错误", "缺少python-docx库，请先安装:\npip install python-docx")
+        except Exception as e:
+            messagebox.showerror("导出失败", f"导出DOCX文件时发生错误:\n{str(e)}")
+            
     def get_current_time(self):
         """获取当前时间字符串"""
         import datetime

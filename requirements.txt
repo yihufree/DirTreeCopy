@@ -6,3 +6,6 @@ pyinstaller>=5.0.0
 
 # Development dependencies (optional)
 # Add any additional dependencies here if needed in the future
+
+# DOCX export functionality
+python-docx>=0.8.11
