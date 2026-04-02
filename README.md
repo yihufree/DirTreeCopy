@@ -28,8 +28,9 @@
 ## 🛠️ 安装方式
 
 ### 方式一：直接下载可执行文件
-1. 从 [Releases](../../releases) 页面下载最新版本的 `DirCopyTool_250625_V1.2.exe`
-2. 双击运行即可使用，无需安装Python环境
+1. 从 [Releases](../../releases) 页面下载最新版本的 `DirCopyTool_260402_V1.3.exe`
+      [DirCopyTool_260402_V1.3]([../../releases](https://github.com/yihufree/DirTreeCopy/releases/download/v1.2/DirCopyTool_260402_V1.3.exe))
+3. 双击运行即可使用，无需安装Python环境
 
 ### 方式二：从源码运行
 1. 克隆仓库到本地：
@@ -113,6 +114,11 @@
 - **跨平台兼容**: 基于Python tkinter，理论上支持多平台
 
 ## 📝 更新日志
+
+### v1.3 (2026-04-02)
+- 增加了json、xls、xlsx格式导出功能
+- 优化了结构
+- 修复了一些问题，速度更快。
 
 ### v1.2.0 (2025-06-25)
 - ✨ **多格式导出功能**：从3种格式扩展到7种导出格式
