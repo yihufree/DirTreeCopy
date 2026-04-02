@@ -30,7 +30,7 @@
 ### 方式一：直接下载可执行文件
 1. 从 [Releases](../../releases) 页面下载最新版本的 `DirCopyTool_260402_V1.3.exe`
    
-      [DirCopyTool_260402_V1.3]([../../releases](https://github.com/yihufree/DirTreeCopy/releases/download/v1.2/DirCopyTool_260402_V1.3.exe))
+      [DirCopyTool_260402_V1.3]([../../releases](https://github.com/yihufree/DirTreeCopy/releases/download/v1.2/DirCopyTool_260402_V1.3.exe)
 3. 双击运行即可使用，无需安装Python环境
 
 ### 方式二：从源码运行
