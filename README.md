@@ -28,10 +28,10 @@
 ## 🛠️ 安装方式
 
 ### 方式一：直接下载可执行文件
-1. 从 [Releases](../../releases) 页面下载最新版本的 `DirCopyTool_260402_V1.3.exe`
+1. 从 [Releases](../../releases) 页面下载最新版本的 `DirCopyTool_260402_V1.3.exe`（如果是压缩包请先解压）
    
       [DirCopyTool_260402_V1.3](https://github.com/yihufree/DirTreeCopy/releases/download/v1.2/DirCopyTool_260402_V1.3.rar)
-3. 双击运行即可使用，无需安装Python环境
+3. 双击运行（解压后的）EXE文件即可使用，无需安装Python环境
 
 ### 方式二：从源码运行
 1. 克隆仓库到本地：
