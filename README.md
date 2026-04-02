@@ -32,6 +32,13 @@
    
       [DirCopyTool_260402_V1.3](https://github.com/yihufree/DirTreeCopy/releases/download/v1.2/DirCopyTool_260402_V1.3.rar)
 3. 双击运行（解压后的）EXE文件即可使用，无需安装Python环境
+4. 如果双击完全没反应、黑一下就消失。可能是Windows 会默认阻止运行，解决方法是：
+找到下载后的 EXE
+右键 → 属性
+最下方看有没有：
+✅ 解除锁定 / Unblock
+勾选 → 确定
+再双击运行
 
 ### 方式二：从源码运行
 1. 克隆仓库到本地：
