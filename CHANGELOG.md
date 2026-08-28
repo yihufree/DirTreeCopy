@@ -10,6 +10,22 @@
 ### 新增
 - 待定功能开发
 
+## [1.3.0] - 2026-04-01
+
+### 更改
+- 🔄 **版本信息统一**：主程序、构建脚本与 spec 文件统一使用 V1.3 / 20260401 版本信息
+- 🔄 **帮助信息整理**：版本说明与更新说明解耦，减少版本号调整后的内容失真风险
+- 🔄 **显示模式隔离**：默认显示、只显示目录、只显示文件从执行模式中独立出来
+
+### 修复
+- 🐛 **高级重命名匹配修正**：精确匹配与通配符匹配逻辑与界面说明保持一致
+- 🐛 **Markdown(含链接)导出修正**：输出结果改为标准 Markdown 链接列表
+- 🐛 **测试兼容性增强**：修正测试数据结构，并兼容 Windows 控制台编码
+
+### 技术特性
+- 🔧 **目录大小缓存**：刷新树时统一构建目录大小缓存，减少大目录重复扫描
+- 🔧 **UI 更新节流**：长循环中使用轻量界面刷新，降低主线程阻塞风险
+
 ## [1.2.0] - 2025-06-25
 
 ### 新增
@@ -91,7 +107,9 @@
 
 ## 版本链接
 
-- [未发布]: https://github.com/username/DirTreeCopy/compare/v1.2.0...HEAD
+- [未发布]: https://github.com/username/DirTreeCopy/compare/v1.4.0...HEAD
+- [1.4.0]: https://github.com/username/DirTreeCopy/compare/v1.3.0...v1.4.0
+- [1.3.0]: https://github.com/username/DirTreeCopy/compare/v1.2.0...v1.3.0
 - [1.2.0]: https://github.com/username/DirTreeCopy/compare/v1.1.0...v1.2.0
 - [1.1.0]: https://github.com/username/DirTreeCopy/compare/v1.0.0...v1.1.0
 - [1.0.0]: https://github.com/username/DirTreeCopy/releases/tag/v1.0.0

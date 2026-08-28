@@ -128,6 +128,17 @@ class OperationHistory:
         elif operation_type == 'delete':
             backup_path = details.get('backup_path')
             return backup_path and os.path.exists(backup_path)
+
+        elif operation_type == 'batch':  # 20260402 084901 支持批次操作撤销判定
+            operations = details.get('operations')
+            if not operations or not isinstance(operations, list):
+                return False
+            for sub_operation in operations:
+                sub_type = sub_operation.get('type')
+                sub_details = sub_operation.get('details', {})
+                if not sub_type or not self._can_operation_undo(sub_type, sub_details):
+                    return False
+            return True
         
         return False
     
@@ -203,9 +214,34 @@ class OperationHistory:
         Returns:
             撤销是否成功
         """
+        return self._execute_undo_internal(operation, confirm=True)  # 20260402 084901 拆分内部执行以支持批次一次确认
+
+    def _execute_undo_internal(self, operation: Dict[str, Any], confirm: bool) -> bool:  # 20260402 084901 新增：撤销内部实现（可关闭确认）
         op_type = operation['type']
         details = operation['details']
         
+        if op_type == 'batch':  # 20260402 084901 支持批次撤销（一次确认，逐项执行）
+            operations = details.get('operations', [])
+            if confirm and self.enable_confirmation and messagebox:
+                description = details.get('description', '批次操作')
+                result = messagebox.askyesno(
+                    "确认撤销",
+                    f"撤销 {description} 将回滚 {len(operations)} 项操作。\n注意：撤销复制类操作会删除目标文件/目录（若目录内已有内容也会一并删除）。\n\n确定要撤销吗？",  # 20260402 085607 批次撤销提示补充删除风险
+                    icon='warning'
+                )
+                if not result:
+                    return False
+            overall_success = True  # 20260402 084901 批次撤销尽量执行完毕并汇总结果
+            for sub_operation in reversed(operations):
+                sub_type = sub_operation.get('type')
+                sub_details = sub_operation.get('details', {})
+                if not sub_type:
+                    overall_success = False
+                    continue
+                if not self._execute_undo_internal({'type': sub_type, 'details': sub_details}, confirm=False):
+                    overall_success = False
+            return overall_success
+
         if op_type == 'rename':
             # 重命名撤销：将新名称改回原名称
             old_path = details['old_path']
@@ -221,14 +257,24 @@ class OperationHistory:
             
             if os.path.exists(target_path):
                 # 添加删除确认对话框
-                if self.enable_confirmation and messagebox:
+                if confirm and self.enable_confirmation and messagebox:  # 20260402 084901 批次撤销时跳过逐项确认
                     item_name = os.path.basename(target_path)
                     item_type = "目录" if os.path.isdir(target_path) else "文件"
-                    result = messagebox.askyesno(
-                        "确认删除", 
-                        f"撤销复制操作将删除{item_type}：\n{item_name}\n\n确定要删除吗？",
-                        icon='warning'
-                    )
+                    if os.path.isdir(target_path):
+                        # 20260828 111834 目录删除风险提示更醒目，明确包含复制后新增内容
+                        result = messagebox.askyesno(
+                            "确认删除",
+                            f"撤销复制操作将删除目录：\n{item_name}\n\n"
+                            f"注意：该目录及其中的全部内容（包括复制完成后新增的内容）都会被删除，且无法恢复！\n\n"
+                            f"确定要删除吗？",
+                            icon='warning'
+                        )
+                    else:
+                        result = messagebox.askyesno(
+                            "确认删除",
+                            f"撤销复制操作将删除文件：\n{item_name}\n\n确定要删除吗？",
+                            icon='warning'
+                        )
                     if not result:
                         return False
                 
@@ -261,8 +307,33 @@ class OperationHistory:
         Returns:
             重做是否成功
         """
+        return self._execute_redo_internal(operation, confirm=True)  # 20260402 084901 拆分内部执行以支持批次一次确认
+
+    def _execute_redo_internal(self, operation: Dict[str, Any], confirm: bool) -> bool:  # 20260402 084901 新增：重做内部实现（可关闭确认）
         op_type = operation['type']
         details = operation['details']
+
+        if op_type == 'batch':  # 20260402 084901 支持批次重做（一次确认，逐项执行）
+            operations = details.get('operations', [])
+            if confirm and self.enable_confirmation and messagebox:
+                description = details.get('description', '批次操作')
+                result = messagebox.askyesno(
+                    "确认重做",
+                    f"重做 {description} 将执行 {len(operations)} 项操作。\n\n确定要重做吗？",
+                    icon='warning'
+                )
+                if not result:
+                    return False
+            overall_success = True  # 20260402 084901 批次重做尽量执行完毕并汇总结果
+            for sub_operation in operations:
+                sub_type = sub_operation.get('type')
+                sub_details = sub_operation.get('details', {})
+                if not sub_type:
+                    overall_success = False
+                    continue
+                if not self._execute_redo_internal({'type': sub_type, 'details': sub_details}, confirm=False):
+                    overall_success = False
+            return overall_success
         
         if op_type == 'rename':
             # 重命名重做：将原名称改为新名称
@@ -291,7 +362,7 @@ class OperationHistory:
             
             if os.path.exists(original_path):
                 # 添加删除确认对话框
-                if self.enable_confirmation and messagebox:
+                if confirm and self.enable_confirmation and messagebox:  # 20260402 084901 批次重做时跳过逐项确认
                     item_name = os.path.basename(original_path)
                     item_type = "目录" if os.path.isdir(original_path) else "文件"
                     result = messagebox.askyesno(
@@ -367,6 +438,12 @@ class OperationHistory:
             source_name = os.path.basename(details.get('source_path', ''))
             target_name = os.path.basename(details.get('target_path', ''))
             return f"复制: {source_name} → {target_name}"
+
+        elif op_type == 'batch':  # 20260402 084901 支持批次操作描述
+            description = details.get('description', '批次操作')
+            operations = details.get('operations', [])
+            count = len(operations) if isinstance(operations, list) else 0
+            return f"{description} (批次 {count} 项)"
         
         elif op_type == 'delete':
             original_name = os.path.basename(details.get('original_path', ''))

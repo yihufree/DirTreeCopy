@@ -4,18 +4,27 @@ from tkinter import filedialog, messagebox, ttk, font
 import shutil
 from operation_history import OperationHistory
 
+APP_NAME = "目录和文件复制及重命名工具"
+APP_VERSION = "V1.4"  # 20260828 110640 版本升级至 V1.4
+APP_BUILD_DATE = "20260828"  # 20260828 110640 构建日期更新为 20260828
+APP_RELEASE_DATE = "2026/08/28"  # 20260828 110640 更新日期更新为 2026/08/28
+APP_DEVELOP_DATE = "2026/08/28"  # 20260828 110640 开发日期更新为 2026/08/28
+APP_AUTHOR = "飞歌"
+APP_EXECUTABLE_NAME = f"DirCopyTool_{APP_BUILD_DATE}_{APP_VERSION}"
+APP_WINDOW_TITLE = f"{APP_NAME}   {APP_BUILD_DATE}  {APP_AUTHOR}"
+
 class DirCopyApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("目录和文件复制及重命名工具   20250625  飞歌")
+        self.root.title(APP_WINDOW_TITLE)
         
         # 获取屏幕尺寸
         screen_width = root.winfo_screenwidth()
         screen_height = root.winfo_screenheight()
         
         # 动态计算窗口大小
-        # 窗口宽度为屏幕宽度的75%，但不少于1000像素，不超过1400像素
-        window_width = max(1080, min(1400, int(screen_width * 0.75)))  # 20250624自行修改 原为MAX(1000,后因添加只显示目录修改为1080。
+        base_window_width = max(800, min(1200, int(screen_width * 0.60)))  # 20260402 120300 以屏幕宽度的60%作为基础宽度
+        window_width = max(720, base_window_width - 150)  # 20260402 120000 默认宽度再减小150（不小于最小宽度）
         window_height = 650
         
         # 计算窗口位置（水平居中，垂直距离上边50像素）
@@ -31,32 +40,43 @@ class DirCopyApp:
         self.root.geometry(f"{window_width}x{window_height}+{x}+{y}")
         
         # 设置窗口最小尺寸
-        self.root.minsize(800, 500)
+        self.root.minsize(720, 500)  # 20260402 112200 允许窗口更紧凑但保留可用空间
         
         # 设置默认字体大小（缩小为原来的80%）
         default_font = font.nametofont("TkDefaultFont")
-        default_font.configure(size=11)
+        default_font.configure(size=10)  # 20260402 101800 界面字体整体降低一级（不含标题与列表框）
         
         text_font = font.nametofont("TkTextFont")
-        text_font.configure(size=11)
+        text_font.configure(size=10)  # 20260402 101800 界面字体整体降低一级（不含标题与列表框）
         
         fixed_font = font.nametofont("TkFixedFont")
-        fixed_font.configure(size=11)
+        fixed_font.configure(size=10)  # 20260402 101800 界面字体整体降低一级（不含标题与列表框）
         
         # 创建按钮专用的较大字体
-        self.button_font = font.Font(family="TkDefaultFont", size=12, weight="bold")
+        self.button_font = font.Font(family="TkDefaultFont", size=11, weight="bold")  # 20260402 101800 界面字体整体降低一级（不含标题与列表框）
         
         # 创建软件标题字体（二号字体约18磅）
         self.title_font = font.Font(family="华文新魏", size=20, weight="bold")
         
         # 创建加粗标签字体
-        self.bold_label_font = font.Font(family="TkDefaultFont", size=11, weight="bold")
+        self.bold_label_font = font.Font(family="TkDefaultFont", size=10, weight="bold")  # 20260402 101800 界面字体整体降低一级（不含标题与列表框）
         
         # 初始化变量
         self.source_dir = tk.StringVar()
         self.dest_dir = tk.StringVar()
         self.copy_mode = tk.StringVar(value="custom")
+        self.tree_display_mode = tk.StringVar(value="normal")
         self.export_format = tk.StringVar(value="txt")
+        self.show_directory_sizes = tk.BooleanVar(value=False)  # 20260402 085901 增加目录大小显示开关（默认关闭以提升大目录性能）
+        self.directory_size_cache = {}
+        self.runtime_warnings = []
+        self.ui_update_interval = 50
+        self.ui_update_counter = 0
+        self.preview_filter_mode = "all"
+        self.tree_item_paths = {}  # 20260402 085901 目录树节点路径映射，用于懒加载与可靠路径解析
+        self.lazy_loaded_items = set()  # 20260402 085901 记录已完成懒加载的节点，避免重复加载
+        self.lazy_placeholder_text = "..."  # 20260402 085901 懒加载占位节点文本
+        self.current_tree_display_mode_override = None  # 20260402 085901 记录当前刷新时的显示模式覆盖值
         
         # 存储复选框状态
         self.checked_items = set()
@@ -67,6 +87,10 @@ class DirCopyApp:
         
         # 创建主界面
         self.create_main_interface()
+        self.task_runner = None  # 20260402 091600 初始化任务调度器引用
+        self.task_running = False  # 20260402 091600 任务运行状态标志
+        self.cancel_requested = False  # 20260402 091600 取消标志
+        self._test_force_sync = False  # 20260402 091600 测试专用：强制同步执行任务，便于无主循环用例
         
     def create_rename_dialog(self, title):
         """创建重命名对话框的通用方法"""
@@ -74,7 +98,7 @@ class DirCopyApp:
         dialog.title(title)
         dialog.geometry("400x200")
         
-        dialog_font = ('TkDefaultFont', 10)
+        dialog_font = ('TkDefaultFont', 9)  # 20260402 101800 界面字体整体降低一级（不含标题与列表框）
         
         ttk.Label(dialog, text="要查找的字符串:", font=dialog_font).pack(pady=5)
         find_var = tk.StringVar()
@@ -88,28 +112,218 @@ class DirCopyApp:
     
     def _setup_backup_directory(self):
         """设置备份目录"""
-        # 在程序目录下创建backup文件夹
-        current_dir = os.path.dirname(os.path.abspath(__file__))
-        backup_dir = os.path.join(current_dir, "backup")
-        self.operation_history.set_backup_directory(backup_dir)
+        app_data_dir = os.getenv("LOCALAPPDATA")  # 20260402 085901 将备份目录迁移到用户可写目录，兼容PyInstaller单文件运行环境
+        if not app_data_dir:
+            app_data_dir = os.path.expanduser(r"~\AppData\Local")  # 20260402 085901 LOCALAPPDATA缺失时使用兜底路径
+        backup_dir = os.path.join(app_data_dir, "DirTreeCopy", "backup")  # 20260402 085901 统一备份目录位置
+        try:
+            os.makedirs(backup_dir, exist_ok=True)  # 20260402 085901 确保备份目录存在
+            self.operation_history.set_backup_directory(backup_dir)  # 20260402 085901 使用用户目录作为备份位置
+        except Exception:
+            current_dir = os.path.dirname(os.path.abspath(__file__))  # 20260402 085901 目录创建失败时回退到程序目录
+            fallback_dir = os.path.join(current_dir, "backup")  # 20260402 085901 回退备份目录
+            self.operation_history.set_backup_directory(fallback_dir)  # 20260402 085901 回退策略
+
+    def _process_pending_ui(self, force=False):
+        if force:
+            self.ui_update_counter = 0
+            self.root.update_idletasks()
+            return
+
+        self.ui_update_counter += 1
+        if self.ui_update_counter >= self.ui_update_interval:
+            self.ui_update_counter = 0
+            self.root.update_idletasks()
+
+    def _reset_runtime_warnings(self):
+        self.runtime_warnings = []
+
+    def _add_runtime_warning(self, message):
+        if message and message not in self.runtime_warnings:
+            self.runtime_warnings.append(message)
+
+    def _show_runtime_warnings(self, title="提示"):
+        if not self.runtime_warnings:
+            return
+
+        max_visible = 8
+        visible_messages = self.runtime_warnings[:max_visible]
+        remaining_count = len(self.runtime_warnings) - len(visible_messages)
+        warning_text = "\n".join(f"• {message}" for message in visible_messages)
+        if remaining_count > 0:
+            warning_text += f"\n• 另有 {remaining_count} 条类似提示未展开显示"
+        messagebox.showwarning(title, warning_text)
+
+    def _show_info_message(self, title, message):
+        messagebox.showinfo(title, message)
+
+    def _show_warning_message(self, title, message):
+        messagebox.showwarning(title, message)
+
+    def _show_error_message(self, title, message):
+        messagebox.showerror(title, message)
+
+    def _require_source_directory(self):
+        if self.source_dir.get():
+            return True
+
+        self._show_warning_message("警告", "请先选择源目录!")
+        return False
+
+    def _finalize_tree_change(self, success_title, success_message, refresh_mode=None, warning_title=None, update_history=False):
+        self._show_info_message(success_title, success_message)
+        if warning_title:
+            self._show_runtime_warnings(warning_title)
+        if refresh_mode is not None:
+            self.refresh_tree(refresh_mode)
+        if update_history:
+            self.update_history_buttons()
+
+    def _execute_history_action(self, action_name, success_message, failure_message, dialog=None):
+        action = getattr(self.operation_history, action_name)
+        if action():
+            self._show_info_message("成功", success_message)
+            self.refresh_tree()
+            self.update_history_buttons()
+            if dialog is not None:
+                dialog.destroy()
+                self.show_operation_history()
+            return True
+
+        self._show_warning_message("警告", failure_message)
+        return False
+
+    def _get_source_items(self, target_type):
+        source_path = self.source_dir.get()
+        predicate = os.path.isdir if target_type == "directory" else os.path.isfile
+
+        try:
+            items = []
+            with os.scandir(source_path) as iterator:  # 20260402 084500 使用scandir减少目录遍历系统调用次数
+                for entry in iterator:
+                    if target_type == "directory":
+                        if entry.is_dir(follow_symlinks=False):
+                            items.append(entry.name)
+                    else:
+                        if entry.is_file(follow_symlinks=False):
+                            items.append(entry.name)
+            return items
+        except Exception as e:
+            self._show_error_message("错误", f"无法读取目录: {str(e)}")
+            return None
+
+    def _get_control_value(self, control):
+        return control.get() if hasattr(control, "get") else control
+
+    def _resolve_multi_rename_controls(self, controls, target_type):
+        if controls is not None:
+            return controls
+
+        prefix = "file_" if target_type == "file" else ""
+        return {
+            "prefix_num_var": getattr(self, f"{prefix}prefix_num_var"),
+            "prefix_conn_var": getattr(self, f"{prefix}prefix_conn_var"),
+            "prefix_text_var": getattr(self, f"{prefix}prefix_text_var"),
+            "suffix_text_var": getattr(self, f"{prefix}suffix_text_var"),
+            "suffix_conn_var": getattr(self, f"{prefix}suffix_conn_var"),
+            "suffix_num_var": getattr(self, f"{prefix}suffix_num_var"),
+            "prefix_num_combo": getattr(self, f"{prefix}prefix_num_combo"),
+            "prefix_conn_combo": getattr(self, f"{prefix}prefix_conn_combo"),
+            "prefix_text_entry": getattr(self, f"{prefix}prefix_text_entry"),
+            "suffix_text_entry": getattr(self, f"{prefix}suffix_text_entry"),
+            "suffix_conn_combo": getattr(self, f"{prefix}suffix_conn_combo"),
+            "suffix_num_combo": getattr(self, f"{prefix}suffix_num_combo"),
+        }
+
+    def _build_multi_rename_name(self, base_name, index, controls, extension=""):
+        prefix_parts = []
+        suffix_parts = []
+
+        if self._get_control_value(controls["prefix_num_var"]):
+            num_type = self._get_control_value(controls["prefix_num_combo"])
+            prefix_parts.append(self.generate_sequence_number(index, num_type))
+
+        if self._get_control_value(controls["prefix_conn_var"]):
+            prefix_parts.append(self._get_control_value(controls["prefix_conn_combo"]))
+
+        if self._get_control_value(controls["prefix_text_var"]):
+            prefix_text = self._get_control_value(controls["prefix_text_entry"]).strip()
+            if prefix_text:
+                prefix_parts.append(prefix_text)
+
+        if self._get_control_value(controls["suffix_text_var"]):
+            suffix_text = self._get_control_value(controls["suffix_text_entry"]).strip()
+            if suffix_text:
+                suffix_parts.append(suffix_text)
+
+        if self._get_control_value(controls["suffix_conn_var"]):
+            suffix_parts.append(self._get_control_value(controls["suffix_conn_combo"]))
+
+        if self._get_control_value(controls["suffix_num_var"]):
+            num_type = self._get_control_value(controls["suffix_num_combo"])
+            suffix_parts.append(self.generate_sequence_number(index, num_type))
+
+        return "".join(prefix_parts) + base_name + "".join(suffix_parts) + extension
+
+    def _prepare_rename_target(self, parent_path, old_name, new_name, item_label):
+        if not new_name or not new_name.strip():
+            return None, f"{item_label} '{old_name}' 的新名称为空，已跳过"
+
+        if new_name == old_name:
+            return None, None
+
+        old_path = os.path.join(parent_path, old_name)
+        new_path = os.path.join(parent_path, new_name)
+
+        if os.path.normcase(old_path) != os.path.normcase(new_path) and os.path.exists(new_path):
+            return None, f"{item_label} '{new_name}' 已存在，跳过重命名 '{old_name}'"
+
+        return new_path, None
+
+    def _build_rename_summary_message(self, type_name, matched_count, success_count, skipped_count, failed_count):
+        return f"重命名完成！匹配 {matched_count} 个{type_name}，成功 {success_count} 个，跳过 {skipped_count} 个，失败 {failed_count} 个。"
+
+    def _format_size_in_kb(self, size_bytes):
+        size_kb = size_bytes / 1024
+        return f"{size_kb:.1f}" if size_kb >= 0.1 else "0.1"
+
+    def _build_directory_size_cache(self, root_path, display_mode):
+        self.directory_size_cache = {}
+        if not root_path or display_mode == "files_only":
+            return
+
+        # 20260828 111834 改用 os.scandir + entry.stat 计算目录大小，减少路径拼接与系统调用
+        try:
+            self._scan_directory_sizes(root_path)
+        except (OSError, IOError, RecursionError):
+            self.directory_size_cache = {}
+
+    def _scan_directory_sizes(self, path):
+        """递归计算目录大小并写入缓存（自底向上，使用 scandir 的 entry.stat）"""
+        total_size = 0
+        try:
+            with os.scandir(path) as it:
+                for entry in it:
+                    try:
+                        if entry.is_dir(follow_symlinks=False):
+                            total_size += self._scan_directory_sizes(entry.path)
+                        else:
+                            total_size += entry.stat(follow_symlinks=False).st_size
+                    except (OSError, IOError):
+                        continue
+        except (PermissionError, OSError):
+            pass
+        self.directory_size_cache[path] = total_size
+        self._process_pending_ui()
+        return total_size
     
     def undo_last_operation(self):
          """撤销上一个操作"""
-         if self.operation_history.undo():
-             messagebox.showinfo("成功", "操作已撤销")
-             self.refresh_tree()
-             self.update_history_buttons()
-         else:
-             messagebox.showwarning("警告", "无法撤销当前操作")
+         self._execute_history_action("undo", "操作已撤销", "无法撤销当前操作")
     
     def redo_last_operation(self):
          """重做上一个操作"""
-         if self.operation_history.redo():
-             messagebox.showinfo("成功", "操作已重做")
-             self.refresh_tree()
-             self.update_history_buttons()
-         else:
-             messagebox.showwarning("警告", "无法重做操作")
+         self._execute_history_action("redo", "操作已重做", "无法重做操作")
     
     def show_operation_history(self):
         """显示操作历史对话框"""
@@ -174,11 +388,7 @@ class DirCopyApp:
     
     def _history_undo_and_refresh(self, dialog):
         """在历史对话框中撤销操作并刷新"""
-        if self.operation_history.undo():
-            messagebox.showinfo("成功", "操作已撤销")
-            self.refresh_tree()
-            dialog.destroy()
-            self.show_operation_history()  # 重新显示更新后的历史
+        self._execute_history_action("undo", "操作已撤销", "无法撤销当前操作", dialog)
      
     def update_history_buttons(self):
         """更新历史操作按钮的状态"""
@@ -198,19 +408,13 @@ class DirCopyApp:
     
     def _history_redo_and_refresh(self, dialog):
         """在历史对话框中重做操作并刷新"""
-        if self.operation_history.redo():
-            messagebox.showinfo("成功", "操作已重做")
-            self.refresh_tree()
-            dialog.destroy()
-            self.show_operation_history()  # 重新显示更新后的历史
-        else:
-            messagebox.showwarning("警告", "无法重做操作")
+        self._execute_history_action("redo", "操作已重做", "无法重做操作", dialog)
     
     def _clear_history_and_refresh(self, dialog):
         """清空历史记录并刷新"""
         if messagebox.askyesno("确认", "确定要清空所有操作历史吗？此操作不可撤销。"):
             self.operation_history.clear_history()
-            messagebox.showinfo("成功", "操作历史已清空")
+            self._show_info_message("成功", "操作历史已清空")
             dialog.destroy()
             self.show_operation_history()  # 重新显示更新后的历史
     
@@ -237,7 +441,7 @@ class DirCopyApp:
         main_frame.pack(fill=tk.BOTH, expand=True)
         
         # 标题
-        title_label = ttk.Label(main_frame, text="目录和文件复制及重命名工具 - 帮助信息", 
+        title_label = ttk.Label(main_frame, text=f"{APP_NAME} - 帮助信息", 
                                font=("TkDefaultFont", 14, "bold"))
         title_label.pack(pady=(0, 15))
         
@@ -249,8 +453,8 @@ class DirCopyApp:
         scrollbar = ttk.Scrollbar(text_frame, orient="vertical", command=help_text.yview)
         help_text.configure(yscrollcommand=scrollbar.set)
         
-        help_content = """【软件功能概述】
-本工具是一个功能强大的目录和文件管理工具，主要用于目录结构复制、文件批量重命名、多格式导出操作和操作历史管理。支持多种复制模式、智能重命名、7种导出格式和完善的撤销/重做功能。
+        help_content = f"""【软件功能概述】
+本工具是一个功能强大的目录和文件管理工具，主要用于目录结构复制、文件批量重命名、多格式导出操作和操作历史管理。支持多种复制模式、智能重命名、10种导出格式和完善的撤销/重做功能。  # 20260828 110640 更新导出格式数量（7→10）
 
 【主要功能模块】
 
@@ -262,32 +466,39 @@ class DirCopyApp:
    • 文件大小显示：实时显示文件和目录大小（KB单位）
    • 类型标识：清晰区分文件和目录类型
 
-2. 【复制模式】（5种模式）
+2. 【操作模式】（5种模式）
    • 复制单层目录：仅复制源目录的第一层空目录结构
-   • 复制选中层：复制在树形视图中用户选择的特定目录和文件
-   • 复制所有层级目录：递归复制整个目录树结构和所有文件
-   • 自定义复制：灵活选择要复制的文件和目录，支持混合选择
-   • 仅复制目录：只复制目录结构，不复制文件内容
-   • 仅复制文件：只复制文件，不创建目录结构
+   • 复制选中层级目录：复制在树形视图中勾选的目录结构
+   • 复制所有层级目录：递归复制整个目录树结构（空目录）
+   • 复制选定目录和文件：灵活选择要复制的文件和目录，支持混合选择
+   • 导出目录和文件的名称：将目录结构导出为10种文档格式
 
-3. 【多格式导出功能】（7种格式）
-   • 导出目录文件名称：生成目录结构文档，支持7种不同格式
+3. 【显示筛选】（3种模式）
+   • 默认显示：同时显示目录和文件
+   • 只显示目录：仅在列表中显示目录，便于查看目录层次
+   • 只显示文件：仅在列表中显示文件，便于查看文件清单
+
+4. 【多格式导出功能】（10种格式）
+   • 导出目录文件名称：生成目录结构文档，支持10种不同格式
    
    格式详细说明：
    ① TXT格式：纯文本树形结构，简洁清晰，适合快速查看
-   ② HTML格式：网页格式，支持折叠展开，美观易读
+   ② HTML格式：静态网页格式，美观易读
    ③ HTML格式(含链接)：在HTML基础上添加可点击链接，直接打开文件
    ④ Markdown格式：适合文档编写和版本控制，支持GitHub等平台
-   ⑤ Markdown(含链接)：在Markdown基础上添加文件链接功能
+   ⑤ Markdown(含链接)：使用Markdown列表输出可点击文件链接
    ⑥ DOCX格式：Microsoft Word文档格式，专业文档输出
    ⑦ DOCX格式(含链接)：Word文档格式，支持真正的超链接，可直接点击打开文件
+   ⑧ JSON格式：标准JSON树形结构，适合程序化处理
+   ⑨ XLSX格式：Excel表格格式，行列展示目录结构
+   ⑩ XLSX格式(含链接)：Excel表格格式，支持可点击的文件链接
    
    • 自动命名：基于当前时间戳和源目录名生成文件名（格式：时间戳_目录名_目录结构.扩展名）
    • 结构化输出：包含完整的层级关系和文件信息
    • 链接功能：支持file://协议的本地文件链接，兼容中文路径
    • 格式化支持：DOCX格式支持居中标题、右对齐时间戳、分层缩进
 
-4. 【批量重命名功能】
+5. 【批量重命名功能】
    • 字符替换重命名：
      - 重命名本级目录：当前级别目录的字符串查找替换
      - 重命名全部：递归重命名所有层级的文件和目录
@@ -304,16 +515,16 @@ class DirCopyApp:
      - 条件替换：复杂的重命名规则
      - 安全检查：防止重名冲突
 
-5. 【操作历史管理】
+6. 【操作历史管理】
    • 智能历史记录：自动记录所有重命名和复制操作
    • 撤销功能：可以撤销最近的操作，支持多级撤销
    • 重做功能：可以重做已撤销的操作
    • 操作历史查看：详细显示操作时间、类型、状态
    • 历史清空：一键清除所有操作历史记录
-   • 备份机制：重要操作自动创建备份，确保数据安全
+   • 历史记录：当前版本主要记录复制和重命名操作的历史信息
    • 状态管理：实时显示可撤销/重做状态
 
-6. 【选择操作】
+7. 【选择操作】
    • 全选：选择当前目录下的所有项目
    • 取消全选：取消所有选择
    • 单项选择：通过复选框选择特定项目
@@ -324,7 +535,7 @@ class DirCopyApp:
 1. 基本复制流程：
    ① 选择源目录（点击"浏览"按钮）
    ② 选择目标目录（点击"浏览"按钮）
-   ③ 选择复制模式（5种模式可选）
+   ③ 选择操作模式（复制或导出）
    ④ 在目录树中选择要操作的项目（可选）
    ⑤ 点击"开始复制"按钮执行操作
    ⑥ 查看操作结果和完成提示
@@ -333,14 +544,17 @@ class DirCopyApp:
    ① 选择源目录（点击"浏览"按钮）
    ② 选择目标目录（导出文件保存位置）
    ③ 选择"导出目录和文件的名称"模式
-   ④ 选择导出格式（7种格式可选）：
+   ④ 选择导出格式（10种格式可选）：
       • TXT格式：纯文本树形结构
-      • HTML格式：网页格式，支持折叠展开
+      • HTML格式：静态网页格式
       • HTML格式(含链接)：可点击链接直接打开文件
       • Markdown格式：适合文档编写
-      • Markdown(含链接)：支持文件链接的Markdown
+      • Markdown(含链接)：使用Markdown列表输出文件链接
       • DOCX格式：Word文档格式
       • DOCX格式(含链接)：支持真正超链接的Word文档
+      • JSON格式：标准JSON树形结构，适合程序化处理
+      • XLSX格式：Excel表格格式，行列展示目录结构
+      • XLSX格式(含链接)：Excel表格格式，支持可点击的文件链接
    ⑤ 点击"开始复制"按钮执行导出
    ⑥ 系统自动生成并保存导出文件到目标目录
    ⑦ 查看导出成功提示和文件位置
@@ -357,7 +571,7 @@ class DirCopyApp:
 【注意事项】
 
 • 重命名操作会直接修改文件系统，建议先备份重要数据
-• 操作历史功能提供安全保障，可以撤销错误操作
+• 操作历史功能可用于撤销已记录的复制和重命名操作
 • 复制大量文件时请耐心等待，系统会显示处理进度
 • 目标目录如果已存在同名文件，系统会智能处理冲突
 • 导出功能支持7种格式：TXT、HTML、HTML(含链接)、Markdown、Markdown(含链接)、DOCX、DOCX(含链接)
@@ -372,6 +586,7 @@ class DirCopyApp:
 
 • 双击目录项可以快速展开/折叠
 • 使用"全选"/"取消全选"可以快速选择项目
+• 目录树采用懒加载：未展开的目录不会预先加载，"全选"仅覆盖已加载的项目；如需选择全部文件，请先展开所有目录，或切换到"只显示文件"筛选后再"全选"
 • "撤销"/"重做"按钮可以快速恢复操作
 • "操作历史"可以查看详细的操作记录和状态
 • 树形视图支持滚动浏览大型目录结构
@@ -398,29 +613,34 @@ class DirCopyApp:
 
 • 异常处理：完善的错误捕获和用户友好提示
 • 内存优化：高效处理大型目录结构
-• 安全机制：操作前验证，操作后备份
+• 安全机制：操作前验证，关键操作具备历史记录支持
 • 界面友好：直观的操作流程和状态反馈
 • 跨平台：基于Python tkinter，支持Windows系统
-• 多格式支持：7种导出格式，满足不同使用场景
+• 多格式支持：10种导出格式，满足不同使用场景
 • 超链接技术：DOCX格式使用底层XML API实现真正的可点击超链接
 • 文件URI转换：支持本地文件路径转换为file://协议，兼容中文路径
 • 依赖管理：自动检测python-docx库，缺失时提供安装指导
 • 代码隔离：新功能完全独立，不影响原有功能稳定性
 
-版本：V1.2
-开发日期：2025/02/24
-更新日期：2025/06/25
-作者：飞歌
+【版本信息】
+当前版本：{APP_VERSION}
+开发日期：{APP_DEVELOP_DATE}
+更新日期：{APP_RELEASE_DATE}
+作者：{APP_AUTHOR}
 
-【版本更新说明】
-V1.2 新增功能：
-• 7种导出格式支持：TXT、HTML、HTML(含链接)、Markdown、Markdown(含链接)、DOCX、DOCX(含链接)
+【当前版本主要能力】
+• 文件名称修改功能：可先勾选部分或全部文件，再执行精确匹配、通配符（直观替换）、正则表达式改名
+• 10种导出格式支持：TXT、HTML、HTML(含链接)、Markdown、Markdown(含链接)、DOCX、DOCX(含链接)、JSON、XLSX、XLSX(含链接)
 • DOCX格式真正超链接功能：使用底层XML API实现可点击的文件链接
 • 文件URI转换技术：支持file://协议，兼容中文路径
 • UI界面优化：导出格式选项单行紧凑布局
-• 依赖管理增强：自动检测python-docx库并提供安装指导
+• 依赖管理增强：自动检测python-docx、XlsxWriter库并提供安装指导
 • 代码隔离设计：新功能完全独立，确保原有功能稳定性
 
+【历史版本补充】
+V1.3 功能：
+• 目录大小缓存：刷新树时统一构建缓存，减少大目录重复扫描
+• UI更新节流：长循环中轻量刷新界面，降低主线程阻塞风险
 V1.1 功能：
 • 完善的操作历史管理系统
 • 智能撤销/重做功能
@@ -441,24 +661,37 @@ V1.1 功能：
         ttk.Button(button_frame, text="关闭", command=help_dialog.destroy).pack(side=tk.RIGHT)
     
     def create_main_interface(self):
+        outer_frame = tk.Frame(self.root, bd=3, relief='ridge')  # 20260402 113200 双线边框宽度增加
+        outer_frame.grid(row=0, column=0, sticky='nsew')
+        
         # 主框架
-        main_frame = ttk.Frame(self.root, padding="10")
+        main_frame = ttk.Frame(outer_frame, padding="10")  # 20260402 112700 增大主界面四边内边距以提升留白与协调性
         main_frame.grid(row=0, column=0, sticky='nsew')
         
         # 配置根窗口和主框架的网格权重
         self.root.grid_rowconfigure(0, weight=1)
         self.root.grid_columnconfigure(0, weight=1)
+        outer_frame.grid_rowconfigure(0, weight=1)  # 20260402 113000 外层边框容器随窗口缩放
+        outer_frame.grid_columnconfigure(0, weight=1)  # 20260402 113000 外层边框容器随窗口缩放
         main_frame.grid_columnconfigure(1, weight=1)  # 让第1列（输入框列）可扩展
         
         # 设置样式
         style = ttk.Style()
-        style.configure('Treeview', rowheight=30)  # 增加行高以容纳更大的复选框
-        style.configure('Treeview.Heading', font=('TkDefaultFont', 10))
-        # 配置树形视图的行样式，添加行分隔线
-        style.configure('Treeview', background='white', foreground='black')
-        style.map('Treeview', background=[('selected', '#E3F2FD')])
-        # 设置行间分隔线
-        style.configure('Treeview', relief='solid', borderwidth=1)
+        try:
+            style.theme_use('vista')  # 20260402 101800 使用Windows更协调的主题
+        except Exception:
+            pass
+
+        primary_color = "#2B6CB0"  # 20260402 101800 统一界面主色
+        danger_color = "#C53030"  # 20260402 101800 危险动作高亮色
+        muted_color = "#666666"  # 20260402 101800 次要信息颜色
+        pad_x = 6  # 20260402 101800 统一界面间距
+        pad_y = 4  # 20260402 101800 统一界面间距
+
+        style.configure('Treeview', rowheight=30, font=('TkDefaultFont', 11))  # 20260402 101800 列表框保持原字号
+        style.configure('Treeview.Heading', font=('TkDefaultFont', 10), relief='ridge', borderwidth=1)  # 20260402 113400 表头分隔更明显
+        style.configure('Treeview', background='white', foreground='black', relief='solid', borderwidth=1)  # 20260402 113400 表格边框更明显
+        style.map('Treeview', background=[('selected', '#E8F1FF')])
         style.layout('Treeview.Item', [
             ('Treeitem.padding', {'sticky': 'nswe', 'children': [
                 ('Treeitem.indicator', {'side': 'left', 'sticky': ''}),
@@ -468,66 +701,89 @@ V1.1 功能：
         ])
         
         # 软件标题
-        title_label = tk.Label(main_frame, text="目录和文件复制及重命名工具", 
-                              font=self.title_font, fg="#003366")
+        title_label = tk.Label(main_frame, text=APP_NAME, 
+                              font=self.title_font, fg=primary_color)  # 20260402 101800 统一界面主色
         title_label.grid(row=0, column=0, columnspan=4, pady=(0, 10))
         
         # 源目录选择
         source_label = ttk.Label(main_frame, text="请先选择源目录:", font=self.bold_label_font)
         source_label.grid(row=1, column=0, sticky='w')
-        ttk.Entry(main_frame, textvariable=self.source_dir).grid(row=1, column=1, padx=5, sticky='ew')
-        ttk.Button(main_frame, text="浏览", command=self.select_source).grid(row=1, column=2, padx=5)
+        self.source_entry = ttk.Entry(main_frame, textvariable=self.source_dir)  # 20260402 100551 记录控件引用，任务执行期间可禁用
+        self.source_entry.grid(row=1, column=1, padx=pad_x, pady=pad_y, sticky='ew')  # 20260402 101800 统一界面间距
+        self.source_browse_button = ttk.Button(main_frame, text="浏览", command=self.select_source)  # 20260402 100551 记录控件引用，任务执行期间可禁用
+        self.source_browse_button.grid(row=1, column=2, padx=pad_x, pady=pad_y)  # 20260402 101800 统一界面间距
         
         # 目标目录选择
         dest_label = ttk.Label(main_frame, text="请选择目标目录:", font=self.bold_label_font)
-        dest_label.grid(row=2, column=0, sticky='w', pady=5)
-        ttk.Entry(main_frame, textvariable=self.dest_dir).grid(row=2, column=1, padx=5, pady=5, sticky='ew')
-        ttk.Button(main_frame, text="浏览", command=self.select_dest).grid(row=2, column=2, padx=5, pady=5)
+        dest_label.grid(row=2, column=0, sticky='w', pady=pad_y)  # 20260402 101800 统一界面间距
+        self.dest_entry = ttk.Entry(main_frame, textvariable=self.dest_dir)  # 20260402 100551 记录控件引用，任务执行期间可禁用
+        self.dest_entry.grid(row=2, column=1, padx=pad_x, pady=pad_y, sticky='ew')  # 20260402 101800 统一界面间距
+        self.dest_browse_button = ttk.Button(main_frame, text="浏览", command=self.select_dest)  # 20260402 100551 记录控件引用，任务执行期间可禁用
+        self.dest_browse_button.grid(row=2, column=2, padx=pad_x, pady=pad_y)  # 20260402 101800 统一界面间距
         
         # 复制模式选择
         mode_frame = ttk.LabelFrame(main_frame, text="复制目录结构和导出文件名功能：", padding="5")
         mode_frame.grid(row=3, column=0, columnspan=3, sticky='ew', pady=10)
         
         # 设置LabelFrame标题颜色为蓝色，加粗
-        style.configure('Blue.TLabelframe.Label', foreground='blue', font=('TkDefaultFont', 11, 'bold'))
+        style.configure('Blue.TLabelframe.Label', foreground=primary_color, font=('TkDefaultFont', 10, 'bold'))  # 20260402 101800 统一界面主色与字号
         mode_frame.configure(style='Blue.TLabelframe')
         
-        ttk.Radiobutton(mode_frame, text="仅复制一层目录", value="single_level", 
-                       variable=self.copy_mode, command=self.on_mode_change).grid(row=0, column=0, padx=(5,2))
-        ttk.Radiobutton(mode_frame, text="复制选定层级目录", value="selected_levels",
-                       variable=self.copy_mode, command=self.on_mode_change).grid(row=0, column=1, padx=2)
-        ttk.Radiobutton(mode_frame, text="复制所有层级目录", value="all_levels", 
-                       variable=self.copy_mode, command=self.on_mode_change).grid(row=0, column=2, padx=2)
-        ttk.Radiobutton(mode_frame, text="复制选定目录和文件", value="custom", 
-                       variable=self.copy_mode, command=self.on_mode_change).grid(row=0, column=3, padx=2)
-        ttk.Radiobutton(mode_frame, text="导出目录和文件的名称", value="export_names", 
-                       variable=self.copy_mode, command=self.on_mode_change).grid(row=0, column=4, padx=2)
-        directories_only_radio = tk.Radiobutton(mode_frame, text="只显示目录", value="directories_only", 
-                       variable=self.copy_mode, command=self.on_mode_change, foreground="blue")
-        directories_only_radio.grid(row=0, column=5, padx=2)
-        files_only_radio = tk.Radiobutton(mode_frame, text="只显示文件", value="files_only", 
-                       variable=self.copy_mode, command=self.on_mode_change, foreground="red")
-        files_only_radio.grid(row=0, column=6, padx=(2,5))
+        self.mode_radio_buttons = []  # 20260402 100551 记录模式单选按钮，任务执行期间可禁用
+        rb = ttk.Radiobutton(mode_frame, text="仅复制一层目录", value="single_level", variable=self.copy_mode, command=self.on_mode_change)
+        rb.grid(row=0, column=0, padx=(5,2))
+        self.mode_radio_buttons.append(rb)
+        rb = ttk.Radiobutton(mode_frame, text="复制选定层级目录", value="selected_levels", variable=self.copy_mode, command=self.on_mode_change)
+        rb.grid(row=0, column=1, padx=2)
+        self.mode_radio_buttons.append(rb)
+        rb = ttk.Radiobutton(mode_frame, text="复制所有层级目录", value="all_levels", variable=self.copy_mode, command=self.on_mode_change)
+        rb.grid(row=0, column=2, padx=2)
+        self.mode_radio_buttons.append(rb)
+        rb = ttk.Radiobutton(mode_frame, text="复制选定目录和文件", value="custom", variable=self.copy_mode, command=self.on_mode_change)
+        rb.grid(row=0, column=3, padx=2)
+        self.mode_radio_buttons.append(rb)
+        rb = ttk.Radiobutton(mode_frame, text="导出目录和文件的名称", value="export_names", variable=self.copy_mode, command=self.on_mode_change)
+        rb.grid(row=0, column=4, padx=2)
+        self.mode_radio_buttons.append(rb)
+        ttk.Label(mode_frame, text="显示筛选:").grid(row=1, column=0, sticky='w', padx=(5, 2), pady=(6, 0))
+        self.display_radio_buttons = []  # 20260402 100551 记录显示筛选单选按钮，任务执行期间可禁用
+        rb = ttk.Radiobutton(mode_frame, text="默认显示", value="normal", variable=self.tree_display_mode, command=self.on_tree_display_mode_change)  # 20260402 101800 统一控件风格（ttk）
+        rb.grid(row=1, column=1, padx=2, pady=(6, 0), sticky='w')
+        self.display_radio_buttons.append(rb)
+        rb = ttk.Radiobutton(mode_frame, text="只显示目录", value="directories_only", variable=self.tree_display_mode, command=self.on_tree_display_mode_change)  # 20260402 101800 统一控件风格（ttk）
+        rb.grid(row=1, column=2, padx=2, pady=(6, 0), sticky='w')
+        self.display_radio_buttons.append(rb)
+        rb = ttk.Radiobutton(mode_frame, text="只显示文件", value="files_only", variable=self.tree_display_mode, command=self.on_tree_display_mode_change)  # 20260402 101800 统一控件风格（ttk）
+        rb.grid(row=1, column=3, padx=2, pady=(6, 0), sticky='w')
+        self.display_radio_buttons.append(rb)
+        self.directory_size_checkbutton = ttk.Checkbutton(mode_frame, text="显示目录大小", variable=self.show_directory_sizes, command=self.on_directory_size_toggle)  # 20260402 100551 记录控件引用，任务执行期间可禁用
+        self.directory_size_checkbutton.grid(row=1, column=4, padx=8, pady=(6, 0), sticky='w')
         
         # 导出格式选择框架
         self.export_format_frame = ttk.LabelFrame(main_frame, text="导出格式", padding="5")
         self.export_format_frame.grid(row=4, column=0, columnspan=3, sticky='ew', pady=5)
         
         # 将所有导出格式选项放在一行，缩小间距
-        ttk.Radiobutton(self.export_format_frame, text="TXT格式", value="txt", 
+        ttk.Radiobutton(self.export_format_frame, text="TXT", value="txt",  # 20260402 111300 导出格式标签去掉“格式”
                        variable=self.export_format).grid(row=0, column=0, padx=5)
-        ttk.Radiobutton(self.export_format_frame, text="HTML格式", value="html", 
+        ttk.Radiobutton(self.export_format_frame, text="HTML", value="html",  # 20260402 111300 导出格式标签去掉“格式”
                        variable=self.export_format).grid(row=0, column=1, padx=5)
-        ttk.Radiobutton(self.export_format_frame, text="HTML格式(含链接)", value="html_link", 
+        ttk.Radiobutton(self.export_format_frame, text="HTML(含链接)", value="html_link",  # 20260402 111300 导出格式标签去掉“格式”
                        variable=self.export_format).grid(row=0, column=2, padx=5)
-        ttk.Radiobutton(self.export_format_frame, text="Markdown格式", value="md", 
+        ttk.Radiobutton(self.export_format_frame, text="Markdown", value="md",  # 20260402 111300 导出格式标签去掉“格式”
                        variable=self.export_format).grid(row=0, column=3, padx=5)
         ttk.Radiobutton(self.export_format_frame, text="Markdown(含链接)", value="md_link", 
                        variable=self.export_format).grid(row=0, column=4, padx=5)
-        ttk.Radiobutton(self.export_format_frame, text="DOCX格式", value="docx", 
+        ttk.Radiobutton(self.export_format_frame, text="DOCX", value="docx",  # 20260402 111300 导出格式标签去掉“格式”
                        variable=self.export_format).grid(row=0, column=5, padx=5)
-        ttk.Radiobutton(self.export_format_frame, text="DOCX格式(含链接)", value="docx_link", 
+        ttk.Radiobutton(self.export_format_frame, text="DOCX(含链接)", value="docx_link",  # 20260402 111300 导出格式标签去掉“格式”
                        variable=self.export_format).grid(row=0, column=6, padx=5)
+        ttk.Radiobutton(self.export_format_frame, text="JSON", value="json",  # 20260402 111300 标签去掉'.'并转大写
+                       variable=self.export_format).grid(row=0, column=7, padx=5)
+        ttk.Radiobutton(self.export_format_frame, text="XLSX", value="xlsx",  # 20260402 111300 标签去掉'.'并转大写
+                       variable=self.export_format).grid(row=0, column=8, padx=5)
+        ttk.Radiobutton(self.export_format_frame, text="XLSX(含链接)", value="xlsx_link",  # 20260402 111300 标签去掉'.'并转大写
+                       variable=self.export_format).grid(row=0, column=9, padx=5)
         
         # 初始隐藏导出格式选择
         self.export_format_frame.grid_remove()
@@ -538,16 +794,28 @@ V1.1 功能：
         
         # 添加重命名功能标签（与框架标题字体大小一致，加粗，蓝色）
         rename_label = tk.Label(rename_frame, text="重命名功能:", 
-                               font=font.Font(family="TkDefaultFont", size=11, weight="bold"), 
-                               fg="blue")
+                               font=self.bold_label_font, fg=primary_color)  # 20260402 101800 统一界面主色与字号
         rename_label.pack(side=tk.LEFT, padx=(0, 10))
         
-        ttk.Button(rename_frame, text="本级目录字符替换", command=self.rename_current_level).pack(side=tk.LEFT, padx=(0,5))
-        ttk.Button(rename_frame, text="全部目录字符替换", command=self.rename_all_items).pack(side=tk.LEFT, padx=5)
-        ttk.Button(rename_frame, text="多维重命名本级目录名", command=self.multi_rename_current_level).pack(side=tk.LEFT, padx=5)
-        ttk.Button(rename_frame, text="多维重命名本级文件名", command=self.multi_rename_current_files).pack(side=tk.LEFT, padx=5)
-        ttk.Button(rename_frame, text="全部目录名修改", command=self.advanced_rename_directories).pack(side=tk.LEFT, padx=5)
-        ttk.Button(rename_frame, text="全部文件名修改", command=self.advanced_rename_files).pack(side=tk.LEFT, padx=5)
+        self.rename_buttons = []  # 20260402 100551 记录重命名按钮，任务执行期间可禁用
+        btn = ttk.Button(rename_frame, text="本级目录字符替换", command=self.rename_current_level)
+        btn.pack(side=tk.LEFT, padx=(0,5))
+        self.rename_buttons.append(btn)
+        btn = ttk.Button(rename_frame, text="全部目录字符替换", command=self.rename_all_items)
+        btn.pack(side=tk.LEFT, padx=5)
+        self.rename_buttons.append(btn)
+        btn = ttk.Button(rename_frame, text="多维重命名本级目录名", command=self.multi_rename_current_level)
+        btn.pack(side=tk.LEFT, padx=5)
+        self.rename_buttons.append(btn)
+        btn = ttk.Button(rename_frame, text="多维重命名本级文件名", command=self.multi_rename_current_files)
+        btn.pack(side=tk.LEFT, padx=5)
+        self.rename_buttons.append(btn)
+        btn = ttk.Button(rename_frame, text="全部目录名修改", command=self.advanced_rename_directories)
+        btn.pack(side=tk.LEFT, padx=5)
+        self.rename_buttons.append(btn)
+        btn = ttk.Button(rename_frame, text="文件名称修改", command=self.advanced_rename_files)  # 20260828 104445 功能名由“全部文件名修改”改为“文件名称修改”，支持先勾选部分文件再修改
+        btn.pack(side=tk.LEFT, padx=5)
+        self.rename_buttons.append(btn)
         
         # 文件树视图
         tree_frame = ttk.Frame(main_frame)
@@ -556,22 +824,23 @@ V1.1 功能：
         # 修改后的树形视图配置
         self.tree = ttk.Treeview(tree_frame, selectmode='none', height=6)
         self.tree["columns"] = ("checked", "type", "size")
-        self.tree.column("#0", width=350)  # 名称列，稍微缩小为大小列腾出空间
-        self.tree.column("checked", width=80, anchor='center')  # 增大复选框列宽度
-        self.tree.column("type", width=100)  # 类型列
-        self.tree.column("size", width=100, anchor='e')  # 大小列，右对齐
+        self.tree.column("#0", width=270, stretch=True)  # 20260402 112200 列表框宽度再收紧约50像素
+        self.tree.column("checked", width=60, anchor='center')  # 20260402 112200 列表框宽度再收紧约50像素
+        self.tree.column("type", width=80)  # 20260402 112200 列表框宽度再收紧约50像素
+        self.tree.column("size", width=80, anchor='e')  # 20260402 112200 列表框宽度再收紧约50像素
         
         # 配置树形视图的标签样式，添加行分隔效果
-        self.tree.tag_configure('oddrow', background='#F5F5F5')
+        self.tree.tag_configure('oddrow', background='#F2F6FF')  # 20260402 113400 行间底色更接近表格分隔视觉
         self.tree.tag_configure('evenrow', background='white')
         
         self.tree.heading("#0", text="名称")
         self.tree.heading("checked", text="选择")
         self.tree.heading("type", text="类型")
-        self.tree.heading("size", text="大小(K)")
+        self.tree.heading("size", text="大小")  # 20260402 101800 简化列标题更协调
         
         # 添加点击事件绑定
         self.tree.bind('<ButtonRelease-1>', self.on_tree_click)
+        self.tree.bind('<<TreeviewOpen>>', self.on_tree_open)  # 20260402 085901 目录树懒加载：展开时再加载子节点
         
         # 添加滚动条
         v_scrollbar = ttk.Scrollbar(tree_frame, orient="vertical", command=self.tree.yview)
@@ -595,7 +864,7 @@ V1.1 功能：
         
         # 回退和重做按钮（放在最左侧）
         # 配置红色文字样式
-        style.configure('Red.TButton', foreground='red')
+        style.configure('Red.TButton', foreground=danger_color)  # 20260402 101800 统一危险动作颜色
         
         self.undo_button = ttk.Button(main_button_frame, text="撤销 ↶", command=self.undo_last_operation, state="disabled", style='Red.TButton')
         self.undo_button.pack(side=tk.LEFT, padx=5)
@@ -604,35 +873,53 @@ V1.1 功能：
         self.redo_button.pack(side=tk.LEFT, padx=5)
         
         # 操作历史按钮
-        ttk.Button(main_button_frame, text="操作历史", command=self.show_operation_history).pack(side=tk.LEFT, padx=5)
+        self.history_button = ttk.Button(main_button_frame, text="操作历史", command=self.show_operation_history)  # 20260402 100551 记录控件引用，任务执行期间可禁用
+        self.history_button.pack(side=tk.LEFT, padx=5)
         
         # 选择按钮
-        ttk.Button(main_button_frame, text="全选", command=self.select_all).pack(side=tk.LEFT, padx=5)
-        ttk.Button(main_button_frame, text="取消全选", command=self.deselect_all).pack(side=tk.LEFT, padx=5)
+        self.select_all_button = ttk.Button(main_button_frame, text="全选", command=self.select_all)  # 20260402 100551 记录控件引用，任务执行期间可禁用
+        self.select_all_button.pack(side=tk.LEFT, padx=5)
+        self.deselect_all_button = ttk.Button(main_button_frame, text="取消全选", command=self.deselect_all)  # 20260402 100551 记录控件引用，任务执行期间可禁用
+        self.deselect_all_button.pack(side=tk.LEFT, padx=5)
         
         # 创建开始复制按钮，增大字体和尺寸
-        start_button = ttk.Button(main_button_frame, text="开始复制或导出", command=self.start_copy)
-        start_button.configure(width=16)  # 增加按钮宽度
+        self.start_button = ttk.Button(main_button_frame, text="开始复制或导出", command=self.start_copy)  # 20260402 100551 记录控件引用，任务执行期间可禁用
+        self.start_button.configure(width=16)  # 增加按钮宽度
         # 为按钮设置样式以应用更大字体和蓝色
-        style.configure('Large.TButton', font=self.button_font, foreground='#0066CC')
-        start_button.configure(style='Large.TButton')
-        start_button.pack(side=tk.LEFT, padx=5, ipady=4)  # 增加按钮高度
-        ttk.Button(main_button_frame, text="取消", command=self.cancel_copy).pack(side=tk.LEFT, padx=5)
-        ttk.Button(main_button_frame, text="帮助信息", command=self.show_help_info).pack(side=tk.LEFT, padx=5)
+        style.configure('Large.TButton', font=self.button_font, foreground=primary_color)  # 20260402 101800 统一界面主色
+        self.start_button.configure(style='Large.TButton')
+        self.start_button.pack(side=tk.LEFT, padx=5, ipady=4)  # 增加按钮高度
+        self.cancel_copy_button = ttk.Button(main_button_frame, text="清空选择", command=self.cancel_copy)  # 20260402 102000 调整按钮文案更明确（清空勾选项）
+        self.cancel_copy_button.pack(side=tk.LEFT, padx=5)
+        self.help_button = ttk.Button(main_button_frame, text="帮助信息", command=self.show_help_info)  # 20260402 100551 记录控件引用，任务执行期间可禁用
+        self.help_button.pack(side=tk.LEFT, padx=5)
+        self.cancel_task_button = ttk.Button(main_button_frame, text="停止当前任务", command=self.cancel_current_task, state="disabled")  # 20260402 111139 将停止任务按钮移至主按钮行，与帮助信息同排
+        self.cancel_task_button.pack(side=tk.LEFT, padx=5)
+
+        self.root.update_idletasks()  # 20260402 115200 计算按钮请求宽度后再按比例收窄（仅改宽度不改高度）
+        self._shrink_bottom_command_button_widths(0.80)  # 20260402 115400 底部命令按钮宽度缩小到现在的80%（仅改宽度不改高度）
         
         # 更新按钮状态
         self.update_history_buttons()
         
+        # 状态栏（进度与任务取消）
+        status_frame = ttk.Frame(main_frame)  # 20260402 101800 将进度与停止按钮放入底部状态栏更协调
+        status_frame.grid(row=9, column=0, columnspan=4, sticky='ew', pady=(2, 2))
+        status_frame.grid_columnconfigure(0, weight=1)
+        self.progress_var = tk.StringVar(value="")  # 20260402 091600 进度文本
+        self.progress_label = ttk.Label(status_frame, textvariable=self.progress_var, foreground=primary_color)  # 20260402 101800 统一界面主色
+        self.progress_label.grid(row=0, column=0, sticky='w')  # 20260402 111139 状态栏仅显示进度文本
+
         # 添加版本信息和作者信息
         info_frame = ttk.Frame(main_frame)
-        info_frame.grid(row=9, column=0, columnspan=4, sticky='ew', pady=5)
+        info_frame.grid(row=10, column=0, columnspan=4, sticky='ew', pady=5)  # 20260402 101800 状态栏占用一行，版本信息下移
         
         # 左下角版本信息
-        version_label = tk.Label(info_frame, text="V1.2   2025/06/25", fg="blue", font=('TkDefaultFont', 9))
+        version_label = tk.Label(info_frame, text=f"{APP_VERSION}   {APP_RELEASE_DATE}", fg=muted_color, font=('TkDefaultFont', 9))  # 20260402 101800 次要信息使用灰阶
         version_label.pack(side=tk.LEFT)
         
         # 右下角作者信息
-        author_label = tk.Label(info_frame, text="作者：飞歌", fg="blue", font=('TkDefaultFont', 9))
+        author_label = tk.Label(info_frame, text=f"作者：{APP_AUTHOR}", fg=muted_color, font=('TkDefaultFont', 9))  # 20260402 101800 次要信息使用灰阶
         author_label.pack(side=tk.RIGHT)
         
         # 配置grid权重
@@ -643,8 +930,41 @@ V1.1 功能：
         tree_frame.grid_columnconfigure(0, weight=1)
         tree_frame.grid_rowconfigure(0, weight=1)  # 让树视图可扩展
 
+    def _shrink_bottom_command_button_widths(self, ratio):  # 20260402 115200 底部命令按钮宽度按比例收窄（仅改宽度）
+        buttons = []
+        for attr in [
+            "undo_button", "redo_button", "history_button",
+            "select_all_button", "deselect_all_button",
+            "cancel_copy_button", "help_button",
+        ]:
+            if hasattr(self, attr):
+                btn = getattr(self, attr)
+                if btn:
+                    buttons.append(btn)
+        for btn in buttons:
+            self._shrink_button_width_to_ratio(btn, ratio)
+
+    def _shrink_button_width_to_ratio(self, button, ratio):  # 20260402 115200 将ttk按钮宽度按像素比例换算到字符宽度
+        try:
+            current_px = int(button.winfo_reqwidth())
+            if current_px <= 0:
+                return
+            desired_px = max(1, int(current_px * ratio))
+            try:
+                f = font.nametofont(button.cget("font"))
+            except Exception:
+                f = font.nametofont("TkDefaultFont")
+            unit_px = max(1, int(f.measure("0")))
+            desired_chars = max(1, int(desired_px / unit_px))
+            button.configure(width=desired_chars)
+        except Exception:
+            pass
+
     def on_mode_change(self):
         """当复制模式改变时的处理"""
+        if getattr(self, "task_running", False):
+            self._show_warning_message("提示", "当前有任务正在执行，暂不支持切换模式。")  # 20260402 100551 任务运行期间禁止切换模式以避免状态混乱
+            return
         mode = self.copy_mode.get()
         self.checked_items.clear()  # 清除之前的选择
         
@@ -655,6 +975,170 @@ V1.1 功能：
             self.export_format_frame.grid_remove()
             
         self.refresh_tree()  # 刷新树形视图
+
+    def on_tree_display_mode_change(self):
+        if getattr(self, "task_running", False):
+            self._show_warning_message("提示", "当前有任务正在执行，暂不支持切换显示筛选。")  # 20260402 100551 任务运行期间禁止切换显示筛选以避免状态混乱
+            return
+        self.refresh_tree()
+
+    def on_directory_size_toggle(self):
+        if getattr(self, "task_running", False):
+            self._show_warning_message("提示", "当前有任务正在执行，暂不支持切换目录大小显示。")  # 20260402 100551 任务运行期间禁止切换目录大小显示以避免状态混乱
+            return
+        self.refresh_tree()  # 20260402 085901 切换目录大小显示后刷新目录树
+    
+    def _set_task_ui_state(self, running):  # 20260402 100551 任务执行期间禁用关键控件，防止并发操作导致整体崩溃
+        state = "disabled" if running else "normal"
+        widgets = []
+        for attr in [
+            "source_entry", "dest_entry", "source_browse_button", "dest_browse_button",
+            "start_button", "history_button", "select_all_button", "deselect_all_button",
+            "cancel_copy_button", "help_button", "directory_size_checkbutton"
+        ]:
+            if hasattr(self, attr):
+                widget = getattr(self, attr)
+                if widget:
+                    widgets.append(widget)
+        if hasattr(self, "rename_buttons"):
+            widgets.extend(list(self.rename_buttons))
+        for widget in widgets:
+            try:
+                widget.configure(state=state)
+            except Exception:
+                pass
+        for group_attr in ["mode_radio_buttons", "display_radio_buttons"]:
+            if hasattr(self, group_attr):
+                for rb in getattr(self, group_attr) or []:
+                    try:
+                        rb.configure(state=state)
+                    except Exception:
+                        pass
+        try:
+            self.undo_button.configure(state="disabled" if running else self.undo_button.cget("state"))
+            self.redo_button.configure(state="disabled" if running else self.redo_button.cget("state"))
+        except Exception:
+            pass
+        if not running:
+            try:
+                self.update_history_buttons()  # 20260402 100551 恢复后同步撤销/重做按钮真实状态
+            except Exception:
+                pass
+    
+    class TaskRunner:  # 20260402 091600 分片任务调度器（可取消）
+        def __init__(self, app, description, total=None, step_size=50):
+            self.app = app
+            self.description = description
+            self.total = total
+            self.step_size = step_size
+            self.queue = []
+            self._after_id = None
+            self._running = False
+            self._on_done = None
+            self._step_fn = None
+            self._completed = 0
+            self._failed = 0
+            self._skipped = 0
+            self._batch_operations = []
+        
+        def start(self, items, step_fn, on_done):
+            if self._running:
+                return False
+            self.queue = list(items)
+            self._step_fn = step_fn
+            self._on_done = on_done
+            self._running = True
+            self.app.task_running = True  # 20260402 091600 标记运行中
+            self.app.cancel_requested = False  # 20260402 091600 清除取消标志
+            self.app._set_task_ui_state(True)  # 20260402 100551 任务启动时禁用关键控件
+            self._update_progress("开始")
+            self._schedule_next()
+            return True
+        
+        def cancel(self):
+            self.app.cancel_requested = True  # 20260402 091600 外部取消
+        
+        def _schedule_next(self):
+            if self.app._test_force_sync:  # 20260402 091600 测试模式：同步执行
+                self._process_step()
+                return
+            self._after_id = self.app.root.after(0, self._process_step)
+        
+        def _process_step(self):
+            if self.app.cancel_requested:
+                self._finish(cancelled=True)
+                return
+            count = 0
+            while self.queue and count < self.step_size:
+                item = self.queue.pop(0)
+                try:
+                    result = self._step_fn(item, self._batch_operations)
+                    status = result
+                    new_items = None
+                    if isinstance(result, tuple) and len(result) == 2:  # 20260402 094929 支持动态追加队列（用于递归遍历类任务）
+                        status, new_items = result
+                    elif isinstance(result, dict):  # 20260402 094929 支持字典返回值（扩展兼容）
+                        status = result.get("status")
+                        new_items = result.get("new_items")
+                    if new_items:
+                        self.queue.extend(list(new_items))  # 20260402 094929 将新任务追加到队列尾部
+                    if status == "skipped":
+                        self._skipped += 1
+                    elif status == "failed":  # 20260402 100551 支持通过返回状态统计失败（不依赖抛异常）
+                        self._failed += 1
+                    else:
+                        self._completed += 1
+                except Exception:
+                    self._failed += 1
+                count += 1
+            self._update_progress("处理中")
+            if self.app.cancel_requested:
+                self._finish(cancelled=True)
+                return
+            if not self.queue:
+                self._finish(cancelled=False)
+            else:
+                self._schedule_next()
+        
+        def _update_progress(self, phase):
+            total = self.total if self.total is not None else (self._completed + self._skipped + self._failed + len(self.queue))
+            text = f"{self.description}：{phase}，完成 {self._completed}，跳过 {self._skipped}，失败 {self._failed}"
+            if total:
+                text += f"（剩余 {len(self.queue)}）"
+            self.app.progress_var.set(text)  # 20260402 091600 更新进度文本
+            self.app.cancel_task_button.configure(state="normal" if self._running else "disabled")
+        
+        def _finish(self, cancelled):
+            self._running = False
+            self.app.task_running = False
+            self.app.cancel_requested = False
+            if self._after_id is not None and not self.app._test_force_sync:
+                try:
+                    self.app.root.after_cancel(self._after_id)
+                except Exception:
+                    pass
+                self._after_id = None
+            if self._on_done:
+                try:
+                    self._on_done({
+                        "completed": self._completed,
+                        "skipped": self._skipped,
+                        "failed": self._failed,
+                        "cancelled": cancelled,
+                        "batch_operations": self._batch_operations
+                    })
+                finally:
+                    self._on_done = None
+            self.app._set_task_ui_state(False)  # 20260402 100551 任务结束后恢复关键控件
+            self.app.progress_var.set("")  # 20260402 091600 清空进度文本
+            self.app.cancel_task_button.configure(state="disabled")  # 20260402 091600 禁用取消按钮
+    
+    def cancel_current_task(self):
+        if getattr(self, "_export_collecting", False):  # 20260828 111834 支持取消导出分片收集
+            self.cancel_requested = True
+            return
+        if hasattr(self, 'task_runner') and self.task_runner and self.task_running:  # 20260402 091600 停止当前分片任务
+            self.task_runner.cancel()
             
     # 修改后的树形视图点击事件处理
     def on_tree_click(self, event):
@@ -667,8 +1151,6 @@ V1.1 功能：
             return
             
         column = self.tree.identify_column(event.x)
-        # 添加调试日志
-        print(f"点击事件 - 列: {column}, 项目: {item}")
         
         if column == "#1":  # 修正：使用 #1 代替 #2
             current_state = self.tree.set(item, "checked")
@@ -724,18 +1206,31 @@ V1.1 功能：
             normalized_path = os.path.normpath(os.path.abspath(directory))
             self.dest_dir.set(normalized_path)
             
-    def refresh_tree(self):
+    def refresh_tree(self, display_mode_override=None):
+        if getattr(self, "task_running", False):
+            self._show_warning_message("提示", "当前有任务正在执行，暂不支持刷新目录树。")  # 20260402 100551 任务运行期间禁止刷新目录树以避免状态混乱
+            return
         # 清空树形视图
         for item in self.tree.get_children():
             self.tree.delete(item)
         self.checked_items.clear()
+        self.ui_update_counter = 0
+        self.tree_item_paths = {}  # 20260402 085901 刷新时重置路径映射
+        self.lazy_loaded_items = set()  # 20260402 085901 刷新时重置懒加载状态
+        self.current_tree_display_mode_override = display_mode_override  # 20260402 085901 记录显示模式覆盖值
             
         # 添加根目录
         source_path = self.source_dir.get()
         if source_path:
-            self.add_directory_to_tree('', source_path)
+            display_mode = display_mode_override or self.tree_display_mode.get()
+            if self.show_directory_sizes.get() and display_mode != "files_only":
+                self._build_directory_size_cache(source_path, display_mode)  # 20260402 085901 仅在需要显示目录大小时构建缓存
+            else:
+                self.directory_size_cache = {}  # 20260402 085901 关闭目录大小显示时清空缓存避免误用
+            self.add_directory_to_tree('', source_path, display_mode_override)  # 20260402 085901 懒加载：仅加载当前层级
+            self._process_pending_ui(force=True)
             
-    def add_directory_to_tree(self, parent, path):
+    def add_directory_to_tree(self, parent, path, display_mode_override=None):
         try:
             # 检查路径是否可访问
             if not os.access(path, os.R_OK):
@@ -745,55 +1240,48 @@ V1.1 功能：
                     values=("", "受限目录", "N/A")
                 )
                 return
-                
-            items = os.listdir(path)
-            for item in items:
-                full_path = os.path.join(path, item)
-                
-                # 检查单个项目是否可访问
-                try:
-                    is_dir = os.path.isdir(full_path)
-                    item_type = "目录" if is_dir else "文件"
-                    
-                    # 根据模式决定是否显示文件
-                    mode = self.copy_mode.get()
-                    if mode == "files_only":
-                        # 只显示文件模式：跳过目录，只显示文件
-                        if is_dir:
+
+            mode = self.copy_mode.get()
+            display_mode = display_mode_override or self.tree_display_mode.get()
+            with os.scandir(path) as iterator:  # 20260402 085901 目录树懒加载：仅加载当前层级
+                for entry in iterator:
+                    try:
+                        item = entry.name
+                        full_path = entry.path
+                        is_dir = entry.is_dir(follow_symlinks=False)
+                        item_type = "目录" if is_dir else "文件"
+
+                        if display_mode == "files_only":
+                            if is_dir:
+                                continue
+                        elif display_mode == "directories_only":
+                            if not is_dir:
+                                continue
+                        elif mode not in ["custom", "export_names"] and not is_dir:
                             continue
-                    elif mode == "directories_only":
-                        # 只显示目录模式：跳过文件，只显示目录
-                        if not is_dir:
-                            continue
-                    elif mode not in ["custom", "export_names"] and not is_dir:
+
+                        show_checkbox = mode in ["custom", "selected_levels"]
+                        if mode == "selected_levels" and not is_dir:
+                            show_checkbox = False
+
+                        size_str = self.get_size_in_kb(full_path)
+
+                        item_id = self.tree.insert(
+                            parent, 'end', text=item,
+                            values=("🔲" if show_checkbox else "", item_type, size_str)
+                        )
+                        self.tree_item_paths[item_id] = full_path  # 20260402 085901 记录节点路径映射
+
+                        row_count = len(self.tree.get_children(parent))
+                        tag = 'oddrow' if row_count % 2 == 1 else 'evenrow'
+                        self.tree.item(item_id, tags=(tag,))
+
+                        if is_dir and display_mode != "files_only":
+                            self.tree.insert(item_id, 'end', text=self.lazy_placeholder_text, values=("", "", ""))  # 20260402 085901 插入占位子节点以支持展开
+
+                        self._process_pending_ui()
+                    except (PermissionError, OSError):
                         continue
-                    
-                    # 确定是否显示复选框
-                    show_checkbox = mode in ["custom", "selected_levels"]
-                    if mode == "selected_levels" and not is_dir:
-                        show_checkbox = False
-                    
-                    # 计算大小
-                    size_str = self.get_size_in_kb(full_path)
-                    
-                    # 插入节点
-                    item_id = self.tree.insert(
-                        parent, 'end', text=item,
-                        values=("🔲" if show_checkbox else "", item_type, size_str)
-                    )
-                    
-                    # 添加行分隔样式（奇偶行不同背景色）
-                    row_count = len(self.tree.get_children(parent))
-                    tag = 'oddrow' if row_count % 2 == 1 else 'evenrow'
-                    self.tree.item(item_id, tags=(tag,))
-                    
-                    # 如果是目录，递归添加子项（files_only模式下不递归）
-                    if is_dir and mode != "files_only":
-                        self.add_directory_to_tree(item_id, full_path)
-                        
-                except (PermissionError, OSError) as e:
-                    # 单个文件/目录访问失败，跳过但不中断整个过程
-                    continue
                     
         except (PermissionError, OSError) as e:
             # 整个目录访问失败
@@ -809,6 +1297,28 @@ V1.1 功能：
         except Exception as e:
             # 其他未预期的错误
             messagebox.showerror("错误", f"访问目录时出现未知错误: {str(e)}")
+
+    def on_tree_open(self, event):
+        item_id = self.tree.focus()  # 20260402 085901 展开节点时触发懒加载
+        if not item_id:
+            return
+        if item_id in self.lazy_loaded_items:
+            return
+        children = self.tree.get_children(item_id)
+        if len(children) == 1 and self.tree.item(children[0]).get('text') == self.lazy_placeholder_text:
+            self.tree.delete(children[0])  # 20260402 085901 删除占位子节点
+        else:
+            if children:
+                self.lazy_loaded_items.add(item_id)  # 20260402 085901 节点已加载过（或有真实子节点）
+                return
+        dir_path = self.tree_item_paths.get(item_id)
+        if not dir_path:
+            return
+        try:
+            self.add_directory_to_tree(item_id, dir_path, self.current_tree_display_mode_override)  # 20260402 085901 仅在展开时加载下一层
+            self.lazy_loaded_items.add(item_id)  # 20260402 085901 标记节点已完成加载
+        except Exception:
+            self.tree.insert(item_id, 'end', text=f"[无法访问: {os.path.basename(dir_path)}]", values=("", "受限目录", "N/A"))  # 20260402 085901 展开失败时显示提示节点
             
     def start_copy(self):
         if not self.validate_inputs():
@@ -826,6 +1336,9 @@ V1.1 功能：
                 self.export_names()
             else:
                 self.copy_custom()
+
+            if getattr(self, "task_running", False):
+                return  # 20260402 093200 分片任务执行中，由任务回调提示结果，避免提前弹出“完成”
                 
             if mode == "export_names":
                 messagebox.showinfo("完成", "导出操作完成!")
@@ -856,22 +1369,53 @@ V1.1 功能：
         """仅复制一层目录（空目录）"""
         src = self.source_dir.get()
         dst = self.dest_dir.get()
-        dirs = [d for d in os.listdir(src) if os.path.isdir(os.path.join(src, d))]
-        created_dirs = []  # 记录创建的目录
+        try:
+            dirs = []
+            with os.scandir(src) as it:  # 20260402 091600 使用scandir构建队列
+                for entry in it:
+                    if entry.is_dir(follow_symlinks=False):
+                        dirs.append(entry.name)
+        except Exception as e:
+            messagebox.showerror("错误", f"无法读取目录:\n{src}\n{str(e)}")
+            return
         
-        for i, dir_name in enumerate(dirs):
+        if not dirs:
+            self._show_info_message("提示", "源目录下没有子目录，无需复制。")  # 20260828 111834 无子目录时给出明确提示
+            return
+        
+        # 分片执行 + 可取消
+        self.task_runner = self.TaskRunner(self, description="复制一层目录", total=len(dirs))  # 20260402 091600 启动任务
+        
+        def step_fn(dir_name, batch_ops):
             target_path = os.path.join(dst, dir_name)
-            if not os.path.exists(target_path):
-                os.makedirs(target_path, exist_ok=True)
-                created_dirs.append(target_path)
-                
-                # 记录每个目录的复制操作到历史
-                self.operation_history.add_operation('copy', {
+            if os.path.exists(target_path):
+                return "skipped"
+            os.makedirs(target_path, exist_ok=True)
+            batch_ops.append({  # 20260402 091600 记录子操作
+                'type': 'copy',
+                'details': {
                     'source_path': os.path.join(src, dir_name),
                     'target_path': target_path,
                     'operation_type': 'copy_single_level',
                     'is_directory': True
+                }
+            })
+        
+        def on_done(summary):
+            if summary.get("batch_operations"):
+                desc = "复制一层目录" + ("（已取消）" if summary.get("cancelled") else "")
+                self.operation_history.add_operation('batch', {  # 20260402 091600 写入批次历史
+                    'description': desc,
+                    'operation_type': 'copy_single_level',
+                    'operations': summary["batch_operations"]
                 })
+                self.update_history_buttons()
+            if summary.get("cancelled"):
+                self._show_info_message("提示", f"已取消：完成 {summary.get('completed',0)} 项，跳过 {summary.get('skipped',0)} 项，失败 {summary.get('failed',0)} 项。")  # 20260402 091600 取消提示
+            else:
+                self._show_info_message("完成", "复制操作完成!")  # 20260402 093200 分片任务完成后统一提示
+        
+        self.task_runner.start(dirs, step_fn, on_done)  # 20260402 091600 启动分片任务
             
     def collect_structure_with_path(self, path, structure_data, level, root_path):
         """递归收集目录结构信息（包含完整路径）"""
@@ -902,6 +1446,7 @@ V1.1 功能：
                     
                     if is_dir:
                         self.collect_structure_with_path(full_path, structure_data, level + 1, root_path)
+                    self._process_pending_ui()
                         
                 except (PermissionError, OSError):
                     # 单个文件/目录访问失败，添加提示信息但继续处理
@@ -929,10 +1474,7 @@ V1.1 功能：
                 'full_path': path
             })
             
-            self.root.update()
-        
-        # 更新历史按钮状态
-        self.update_history_buttons()
+            self._process_pending_ui()
             
     def copy_selected_levels(self):
         """复制用户勾选的目录（仅结构）"""
@@ -940,66 +1482,155 @@ V1.1 功能：
             messagebox.showwarning("警告", "请选择要复制的目录!")
             return
             
-        created_dirs = []  # 记录创建的目录
-        
-        for i, item_id in enumerate(self.checked_items):
-            item_path = self.get_item_path(item_id)
-            if not os.path.isdir(item_path):  # 跳过非目录项
-                continue
-                
-            rel_path = os.path.relpath(item_path, self.source_dir.get())
-            dst_path = os.path.join(self.dest_dir.get(), rel_path)
-            
+        self._reset_runtime_warnings()
+        source_root = self.source_dir.get()  # 20260402 100551 固化源/目标与路径队列，避免任务期间树刷新导致路径解析异常
+        dest_root = self.dest_dir.get()  # 20260402 100551 固化源/目标与路径队列，避免任务期间树刷新导致路径解析异常
+        items = []
+        for item_id in list(self.checked_items):
             try:
-                if not os.path.exists(dst_path):
-                    os.makedirs(dst_path, exist_ok=True)
-                    created_dirs.append(dst_path)
-                    
-                    # 记录每个目录的复制操作到历史
-                    self.operation_history.add_operation('copy', {
+                item_path = self.get_item_path(item_id)
+            except Exception:
+                self._add_runtime_warning("选中项路径解析失败，已跳过。")  # 20260402 100551 防止树刷新/节点失效导致异常
+                continue
+            if not os.path.isdir(item_path):
+                continue
+            try:
+                rel_path = os.path.relpath(item_path, source_root)
+            except Exception:
+                continue
+            dst_path = os.path.join(dest_root, rel_path)
+            items.append((item_path, dst_path, rel_path))
+
+        if not items:
+            return
+
+        self.task_runner = self.TaskRunner(self, description="复制选定层级目录", total=len(items))  # 20260402 093200 启动任务
+
+        def step_fn(item, batch_ops):
+            item_path, dst_path, rel_path = item
+            if os.path.exists(dst_path):
+                return "skipped"
+
+            try:
+                os.makedirs(dst_path, exist_ok=True)
+                batch_ops.append({  # 20260402 093200 记录子操作
+                    'type': 'copy',
+                    'details': {
                         'source_path': item_path,
                         'target_path': dst_path,
                         'operation_type': 'copy_selected_levels',
                         'is_directory': True
-                    })
-                
-                self.root.update()
-            except Exception as e:
-                messagebox.showerror("错误", f"创建目录失败: {rel_path}\n{str(e)}")
-        
-        # 更新历史按钮状态
-        self.update_history_buttons()
+                    }
+                })
+            except Exception:
+                self._add_runtime_warning(f"创建目录失败：{rel_path}")  # 20260402 093200 记录失败原因用于汇总提示
+                raise
+
+        def on_done(summary):
+            if summary.get("batch_operations"):
+                desc = "复制选定层级目录" + ("（已取消）" if summary.get("cancelled") else "")
+                self.operation_history.add_operation('batch', {  # 20260402 093200 写入批次历史
+                    'description': desc,
+                    'operation_type': 'copy_selected_levels',
+                    'operations': summary["batch_operations"]
+                })
+                self.update_history_buttons()
+            if summary.get("cancelled"):
+                self._show_info_message("提示", f"已取消：完成 {summary.get('completed',0)} 项，跳过 {summary.get('skipped',0)} 项，失败 {summary.get('failed',0)} 项。")  # 20260402 093200 取消提示
+            else:
+                self._show_info_message("完成", "复制操作完成!")  # 20260402 093200 分片任务完成后统一提示
+            self._show_runtime_warnings("复制提示")  # 20260402 093200 汇总提示
+
+        self.task_runner.start(items, step_fn, on_done)  # 20260402 093200 启动分片任务
                 
     def copy_all_levels(self):
         """复制完整目录树（空目录）"""
-        self.created_dirs_for_history = []  # 用于记录创建的目录
-        self.copy_dir_tree(self.source_dir.get(), self.dest_dir.get())
+        self._reset_runtime_warnings()
+        src_root = self.source_dir.get()
+        dst_root = self.dest_dir.get()
+        failed_prefixes = []  # 20260402 093522 记录创建失败的目标路径前缀，避免对子目录反复报错
+        self.task_runner = self.TaskRunner(self, description="复制所有层级目录")  # 20260402 100551 将扫描纳入分片执行，避免预扫描卡顿
         
-        # 更新历史按钮状态
-        self.update_history_buttons()
+        def step_fn(item, batch_ops):
+            src_dir, dst_dir = item
+            new_items = []
+            dst_norm = os.path.normcase(os.path.abspath(dst_dir))
+            for prefix in failed_prefixes:
+                if dst_norm.startswith(prefix):
+                    return ("skipped", new_items)
+
+            created = False
+            try:
+                if not os.path.exists(dst_dir):
+                    os.makedirs(dst_dir, exist_ok=True)
+                    created = True
+            except Exception:
+                failed_prefixes.append(dst_norm + os.sep)
+                self._add_runtime_warning(f"无法创建目录：{dst_dir}")
+                return ("failed", new_items)  # 20260402 100551 创建失败不再抛异常，避免整体中断
+
+            if created:
+                batch_ops.append({  # 20260402 093522 记录子操作（目录创建）
+                    'type': 'copy',
+                    'details': {
+                        'source_path': src_dir,
+                        'target_path': dst_dir,
+                        'operation_type': 'copy_all_levels',
+                        'is_directory': True
+                    }
+                })
+
+            try:
+                with os.scandir(src_dir) as iterator:  # 20260402 100551 分片扫描子目录
+                    for entry in iterator:
+                        if entry.is_dir(follow_symlinks=False):
+                            new_items.append((entry.path, os.path.join(dst_dir, entry.name)))
+            except Exception:
+                self._add_runtime_warning(f"无法访问目录：{src_dir}")
+                return ("skipped", [])
+
+            return (("processed" if created else "skipped"), new_items)  # 20260402 100551 未创建但继续扫描子目录时计为跳过
         
-    def copy_dir_tree(self, src, dst):
+        def on_done(summary):
+            if summary.get("batch_operations"):
+                desc = "复制所有层级目录" + ("（已取消）" if summary.get("cancelled") else "")
+                self.operation_history.add_operation('batch', {  # 20260402 093522 写入批次历史
+                    'description': desc,
+                    'operation_type': 'copy_all_levels',
+                    'operations': summary["batch_operations"]
+                })
+                self.update_history_buttons()
+            if summary.get("cancelled"):
+                self._show_info_message("提示", f"已取消：完成 {summary.get('completed',0)} 项，跳过 {summary.get('skipped',0)} 项，失败 {summary.get('failed',0)} 项。")  # 20260402 093522 取消提示
+            else:
+                self._show_info_message("完成", "复制操作完成!")  # 20260402 093522 分片任务完成后统一提示
+            self._show_runtime_warnings("复制提示")  # 20260402 093522 汇总提示
+        
+        self.task_runner.start([(src_root, dst_root)], step_fn, on_done)  # 20260402 100551 启动分片任务（从根目录开始）
+        
+    def copy_dir_tree(self, src, dst, batch_operations=None):
         try:
             if not os.path.exists(dst):
                 os.makedirs(dst, exist_ok=True)
-                
-                # 记录目录创建操作到历史（仅在copy_all_levels调用时）
-                if hasattr(self, 'created_dirs_for_history'):
-                    self.operation_history.add_operation('copy', {
-                        'source_path': src,
-                        'target_path': dst,
-                        'operation_type': 'copy_all_levels',
-                        'is_directory': True
+                if batch_operations is not None:
+                    batch_operations.append({  # 20260402 085047 记录子操作（目录创建）
+                        'type': 'copy',
+                        'details': {
+                            'source_path': src,
+                            'target_path': dst,
+                            'operation_type': 'copy_all_levels',
+                            'is_directory': True
+                        }
                     })
                     
         except (PermissionError, OSError) as e:
-            print(f"警告：无法创建目录 {dst}，权限不足: {str(e)}")
+            self._add_runtime_warning(f"无法创建目录：{dst}")
             return
         
         try:
             items = os.listdir(src)
         except (PermissionError, OSError) as e:
-            print(f"警告：无法访问目录 {src}，权限不足: {str(e)}")
+            self._add_runtime_warning(f"无法访问目录：{src}")
             return
         
         for item in items:
@@ -1007,12 +1638,12 @@ V1.1 功能：
             try:
                 if os.path.isdir(src_item):
                     dst_item = os.path.join(dst, item)
-                    self.copy_dir_tree(src_item, dst_item)
+                    self.copy_dir_tree(src_item, dst_item, batch_operations)
             except (PermissionError, OSError) as e:
-                print(f"警告：跳过无法访问的目录 {src_item}: {str(e)}")
+                self._add_runtime_warning(f"跳过无法访问的目录：{src_item}")
                 continue
             
-            self.root.update()
+            self._process_pending_ui()
                 
     def copy_custom(self):
         """自定义复制（允许选择文件和目录）"""
@@ -1020,46 +1651,81 @@ V1.1 功能：
             messagebox.showwarning("警告", "请选择要复制的项目!")
             return
             
-        copied_items = []  # 记录复制的项目
-        
-        for i, item_id in enumerate(self.checked_items):
-            item_path = self.get_item_path(item_id)
-            rel_path = os.path.relpath(item_path, self.source_dir.get())
-            dst_path = os.path.join(self.dest_dir.get(), rel_path)
-            
+        self._reset_runtime_warnings()
+        source_root = self.source_dir.get()  # 20260402 100551 固化源/目标与路径队列，避免任务期间树刷新导致路径解析异常
+        dest_root = self.dest_dir.get()  # 20260402 100551 固化源/目标与路径队列，避免任务期间树刷新导致路径解析异常
+        items = []
+        for item_id in list(self.checked_items):
             try:
-                if os.path.isdir(item_path):
-                    if not os.path.exists(dst_path):
-                        shutil.copytree(item_path, dst_path, dirs_exist_ok=True)
-                        copied_items.append(dst_path)
-                        
-                        # 记录目录复制操作到历史
-                        self.operation_history.add_operation('copy', {
+                item_path = self.get_item_path(item_id)
+            except Exception:
+                self._add_runtime_warning("选中项路径解析失败，已跳过。")  # 20260402 100551 防止树刷新/节点失效导致异常
+                continue
+            if not os.path.exists(item_path):
+                continue
+            try:
+                rel_path = os.path.relpath(item_path, source_root)
+            except Exception:
+                continue
+            dst_path = os.path.join(dest_root, rel_path)
+            items.append((item_path, dst_path, rel_path, os.path.isdir(item_path)))
+
+        if not items:
+            return
+
+        self.task_runner = self.TaskRunner(self, description="自定义复制", total=len(items))  # 20260402 094200 启动任务
+        
+        def step_fn(item, batch_ops):
+            item_path, dst_path, rel_path, is_dir = item
+            try:
+                if is_dir:
+                    if os.path.exists(dst_path):
+                        return "skipped"
+                    shutil.copytree(item_path, dst_path, dirs_exist_ok=True)
+                    batch_ops.append({  # 20260402 094200 记录子操作
+                        'type': 'copy',
+                        'details': {
                             'source_path': item_path,
                             'target_path': dst_path,
                             'operation_type': 'copy_custom',
                             'is_directory': True
-                        })
+                        }
+                    })
                 else:
-                    if not os.path.exists(dst_path):
-                        os.makedirs(os.path.dirname(dst_path), exist_ok=True)
-                        shutil.copy2(item_path, dst_path)
-                        copied_items.append(dst_path)
-                        
-                        # 记录文件复制操作到历史
-                        self.operation_history.add_operation('copy', {
+                    if os.path.exists(dst_path):
+                        return "skipped"
+                    os.makedirs(os.path.dirname(dst_path), exist_ok=True)
+                    shutil.copy2(item_path, dst_path)
+                    batch_ops.append({  # 20260402 094200 记录子操作
+                        'type': 'copy',
+                        'details': {
                             'source_path': item_path,
                             'target_path': dst_path,
                             'operation_type': 'copy_custom',
                             'is_directory': False
-                        })
-                
-                self.root.update()
+                        }
+                    })
             except Exception as e:
-                messagebox.showerror("错误", f"复制失败: {rel_path}\n{str(e)}")
+                # 20260828 111834 批量复制失败不再逐项弹窗，改为收集后由任务结束统一汇总提示
+                self._add_runtime_warning(f"复制失败：{rel_path}（{str(e)}）")
+                raise
         
-        # 更新历史按钮状态
-        self.update_history_buttons()
+        def on_done(summary):
+            if summary.get("batch_operations"):
+                desc = "自定义复制" + ("（已取消）" if summary.get("cancelled") else "")
+                self.operation_history.add_operation('batch', {  # 20260402 094200 写入批次历史
+                    'description': desc,
+                    'operation_type': 'copy_custom',
+                    'operations': summary["batch_operations"]
+                })
+                self.update_history_buttons()
+            if summary.get("cancelled"):
+                self._show_info_message("提示", f"已取消：完成 {summary.get('completed',0)} 项，跳过 {summary.get('skipped',0)} 项，失败 {summary.get('failed',0)} 项。")  # 20260402 094200 取消提示
+            else:
+                self._show_info_message("完成", "复制操作完成!")  # 20260402 094200 分片任务完成后统一提示
+            self._show_runtime_warnings("复制提示")  # 20260402 094200 汇总提示
+
+        self.task_runner.start(items, step_fn, on_done)  # 20260402 094200 启动分片任务
                 
     def export_names(self):
         """导出目录和文件名称到指定格式的文档"""
@@ -1079,17 +1745,110 @@ V1.1 功能：
             file_ext = "md"
         elif export_format in ["docx", "docx_link"]:
             file_ext = "docx"
+        elif export_format in ["xlsx", "xlsx_link"]:
+            file_ext = "xlsx"  # 20260402 103300 修复xlsx_link导出扩展名，统一为.xlsx
+        elif export_format == "json":
+            file_ext = "json"  # 20260402 103300 明确json扩展名
         else:
             file_ext = export_format
-            
-        filename = f"{current_time}_{source_name}_目录结构.{file_ext}"
+
+        filename_prefix = f"{current_time}_{source_name}_目录结构"
+        if export_format == "xlsx_link":
+            filename_prefix += "_含链接"  # 20260402 103300 避免xlsx与xlsx(含链接)导出同名覆盖
+        filename = f"{filename_prefix}.{file_ext}"
         output_path = os.path.join(dst, filename)
         
-        # 收集目录结构信息（含完整路径）
+        # 20260828 111834 导出改为“分片收集目录结构 + 生成文档”流程，避免大目录同步遍历卡界面，并支持“停止当前任务”取消
+        if getattr(self, "task_running", False):
+            self._show_warning_message("提示", "当前有任务正在执行，请稍后再试。")
+            return
+
         structure_data = []
-        self.collect_structure_with_path(src, structure_data, 0, src)
-        
-        # 根据格式生成内容
+        self._reset_runtime_warnings()
+        self.task_running = True
+        self.cancel_requested = False
+        self._export_collecting = True  # 20260828 111834 标记导出收集阶段，供“停止当前任务”取消
+        self._set_task_ui_state(True)
+        self.cancel_task_button.configure(state="normal")  # 20260828 111834 启用“停止当前任务”以支持取消导出
+        self.progress_var.set("正在收集目录结构...")
+
+        def on_collect_done(cancelled):
+            self._export_collecting = False
+            self.task_running = False
+            self._set_task_ui_state(False)
+            self.cancel_task_button.configure(state="disabled")  # 20260828 111834 收集结束恢复按钮状态
+            if cancelled:
+                self.progress_var.set("")
+                self._show_info_message("提示", "导出已取消。")
+                return
+            self.progress_var.set("正在生成导出文档...")
+            try:
+                self._finish_export(structure_data, source_name, export_format, output_path)
+                self._show_info_message("完成", "导出操作完成!")
+            except Exception as e:
+                self._show_error_message("错误", f"导出过程中出错:\n{str(e)}")
+            finally:
+                self.progress_var.set("")
+
+        self._start_export_collect(src, structure_data, on_collect_done)
+
+    def _start_export_collect(self, root_path, structure_data, on_done):
+        """分片收集目录结构（显式栈深度优先，顺序与原递归逻辑一致），期间界面可响应、可取消"""
+        stack = [(root_path, 0)]
+        self._export_after_id = None
+
+        def cleanup_after():
+            if self._export_after_id is not None:
+                try:
+                    self.root.after_cancel(self._export_after_id)
+                except Exception:
+                    pass
+                self._export_after_id = None
+
+        def process_slice():
+            if self.cancel_requested:
+                cleanup_after()
+                on_done(True)
+                return
+            count = 0
+            while stack and count < self.ui_update_interval:
+                path, level = stack.pop()
+                count += 1
+                try:
+                    if not os.access(path, os.R_OK):
+                        structure_data.append({'name': f"[无法访问: {os.path.basename(path)}]", 'level': level, 'is_dir': False, 'full_path': path})
+                        continue
+                    items = sorted(os.listdir(path))
+                except (PermissionError, OSError):
+                    structure_data.append({'name': f"[无法访问: {os.path.basename(path)}]", 'level': level, 'is_dir': False, 'full_path': path})
+                    continue
+                except Exception as e:
+                    structure_data.append({'name': f"[错误: {os.path.basename(path)} - {str(e)}]", 'level': level, 'is_dir': False, 'full_path': path})
+                    continue
+                subdirs = []
+                for item in items:
+                    full_path = os.path.join(path, item)
+                    try:
+                        is_dir = os.path.isdir(full_path)
+                    except (PermissionError, OSError):
+                        is_dir = False
+                    structure_data.append({'name': item, 'level': level, 'is_dir': is_dir, 'full_path': full_path})
+                    if is_dir:
+                        subdirs.append(full_path)
+                # 倒序压栈以保持与原递归一致的深度优先顺序
+                for sub in reversed(subdirs):
+                    stack.append((sub, level + 1))
+            if stack:
+                self.progress_var.set(f"正在收集目录结构...（剩余 {len(stack)} 个目录）")
+                self._export_after_id = self.root.after(0, process_slice)
+            else:
+                cleanup_after()
+                on_done(False)
+
+        process_slice()
+
+    def _finish_export(self, structure_data, source_name, export_format, output_path):
+        """根据收集到的结构数据生成并写入导出文件（原 export_names 后半部分逻辑）"""
         if export_format == "txt":
             content = self.generate_txt_content(structure_data, source_name)
         elif export_format == "html":
@@ -1106,12 +1865,86 @@ V1.1 功能：
         elif export_format == "docx_link":
             self.generate_docx_content_with_links(structure_data, source_name, output_path)
             return  # DOCX直接写入文件，不需要后续的文本写入操作
-        
+        elif export_format == "json":  # 20260402 102300 新增JSON导出
+            content = self.generate_json_content(structure_data, source_name)
+        elif export_format == "xlsx":  # 20260402 102300 新增XLSX导出
+            self.write_xlsx_file(structure_data, source_name, output_path, with_links=False)
+            return  # XLSX直接写入文件
+        elif export_format == "xlsx_link":  # 20260402 102300 新增XLSX(含链接)导出
+            self.write_xlsx_file(structure_data, source_name, output_path, with_links=True)
+            return  # XLSX直接写入文件
+
         # 写入文件
         with open(output_path, 'w', encoding='utf-8') as f:
             f.write(content)
+    
+    def generate_json_content(self, structure_data, source_name):  # 20260402 102300 新增：生成JSON内容
+        import json
+        rows = []
+        for item in structure_data:
+            rows.append({
+                "level": int(item.get("level", 0)),
+                "type": "目录" if item.get("is_dir") else "文件",
+                "name": str(item.get("name", "")),
+                "full_path": str(item.get("full_path", "")),
+                "is_dir": bool(item.get("is_dir", False))
+            })
+        return json.dumps(rows, ensure_ascii=False, indent=2)
+    
+    def write_xlsx_file(self, structure_data, source_name, output_path, with_links=False):  # 20260402 102300 新增：写入XLSX文件（可含链接）
+        try:
+            import xlsxwriter
+        except ImportError:
+            self._show_error_message(
+                "缺少依赖",
+                "未检测到 xlsxwriter 库，无法导出为 .xlsx。\n\n请先安装：\n\npip install XlsxWriter"
+            )
+            return
+        
+        try:
+            workbook = xlsxwriter.Workbook(output_path)
+            ws = workbook.add_worksheet("目录结构")
             
-        pass  # 状态标签已删除
+            header_fmt = workbook.add_format({"bold": True})
+            wrap_fmt = workbook.add_format({"text_wrap": True})
+            
+            ws.write(0, 0, "层级", header_fmt)
+            ws.write(0, 1, "类型", header_fmt)
+            ws.write(0, 2, "名称", header_fmt)
+            ws.write(0, 3, "完整路径", header_fmt)
+            
+            row = 1
+            for item in structure_data:
+                level = int(item.get("level", 0))
+                is_dir = bool(item.get("is_dir", False))
+                name = str(item.get("name", ""))
+                full_path = str(item.get("full_path", ""))
+                typ = "目录" if is_dir else "文件"
+                
+                ws.write_number(row, 0, level)
+                ws.write(row, 1, typ)
+                ws.write(row, 2, name, wrap_fmt)
+                
+                if with_links and full_path:
+                    try:
+                        uri = self.path_to_file_uri(full_path)
+                        ws.write_url(row, 3, uri, string=full_path)  # 链接文本用完整路径  # 20260402 102300
+                    except Exception:
+                        ws.write(row, 3, full_path, wrap_fmt)
+                else:
+                    ws.write(row, 3, full_path, wrap_fmt)
+                
+                row += 1
+            
+            ws.set_column(0, 0, 8)   # 层级
+            ws.set_column(1, 1, 8)   # 类型
+            ws.set_column(2, 2, 40)  # 名称
+            ws.set_column(3, 3, 60)  # 完整路径
+        finally:
+            try:
+                workbook.close()
+            except Exception:
+                pass
         
     def collect_structure(self, path, structure_data, level=0):
         """递归收集目录结构信息"""
@@ -1279,7 +2112,6 @@ V1.1 功能：
         lines = []
         lines.append(f"# 目录结构(含链接) - {source_name}")
         lines.append("")
-        lines.append("```")
         
         for item in structure_data:
             indent = "  " * item['level']
@@ -1289,9 +2121,8 @@ V1.1 功能：
             file_uri = self.path_to_file_uri(item['full_path'])
             
             # Markdown链接格式
-            lines.append(f"{indent}{prefix}[{item['name']}]({file_uri})")
+            lines.append(f"{indent}- {prefix}[{item['name']}]({file_uri})")
             
-        lines.append("```")
         lines.append("")
         lines.append(f"*导出时间: {self.get_current_time()}*")
         
@@ -1441,7 +2272,6 @@ V1.1 功能：
                     
                 except Exception as link_error:
                     # 如果超链接创建失败，回退到普通文本
-                    print(f"创建超链接失败: {link_error}")
                     hyperlink_run = para.add_run(item['name'])
                     hyperlink_run.font.color.rgb = RGBColor(0, 0, 255)  # 蓝色
                     hyperlink_run.font.underline = True
@@ -1468,6 +2298,9 @@ V1.1 功能：
         return datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         
     def get_item_path(self, item_id):
+        mapped_path = self.tree_item_paths.get(item_id)  # 20260402 085901 优先使用节点路径映射，提升懒加载场景路径解析可靠性
+        if mapped_path:
+            return mapped_path
         path_parts = []
         while item_id:
             path_parts.insert(0, self.tree.item(item_id)['text'])
@@ -1475,14 +2308,13 @@ V1.1 功能：
         return os.path.join(self.source_dir.get(), *path_parts)
         
     def cancel_copy(self):
-        if messagebox.askyesno("确认", "确定要取消当前操作吗?"):
-            pass  # 状态标签已删除
-            pass
+        if messagebox.askyesno("确认", "确定要清空当前勾选项吗？\n（不停止正在执行的任务；停止任务请点“停止当前任务”）"):  # 20260402 102000 调整文案并明确用途
+            self.deselect_all()  # 20260402 102000 清空勾选项
+            self._reset_runtime_warnings()  # 20260402 102000 同步清空运行提示
 
     def rename_current_level(self):
         """重命名本级文件夹"""
-        if not self.source_dir.get():
-            messagebox.showwarning("警告", "请先选择源目录!")
+        if not self._require_source_directory():
             return
             
         dialog, find_var, replace_var = self.create_rename_dialog("本级目录字符替换")
@@ -1492,52 +2324,104 @@ V1.1 功能：
             replace_text = replace_var.get()
             
             if not find_text:
-                messagebox.showwarning("警告", "请输入要查找的字符串!")
+                self._show_warning_message("警告", "请输入要查找的字符串!")
                 return
-                
-            try:
-                source_path = self.source_dir.get()
-                renamed_count = 0
-                
-                for item in os.listdir(source_path):
-                    full_path = os.path.join(source_path, item)
-                    if os.path.isdir(full_path) and find_text in item:
-                        new_name = item.replace(find_text, replace_text)
-                        new_path = os.path.join(source_path, new_name)
-                        try:
-                            os.rename(full_path, new_path)
-                            
-                            # 记录操作到历史
-                            self.operation_history.add_operation('rename', {
-                                'old_path': full_path,
-                                'new_path': new_path,
-                                'operation_type': 'rename_current_level'
-                            })
-                            
-                            renamed_count += 1
-                        except Exception as e:
-                            messagebox.showerror("错误", f"重命名 '{item}' 失败: {str(e)}")
-                            continue
-                
-                messagebox.showinfo("完成", f"重命名完成！共重命名 {renamed_count} 个文件夹。")
-                dialog.destroy()
-                # 临时设置为只显示目录模式以便查看效果
-                original_mode = self.copy_mode.get()
-                self.copy_mode.set("directories_only")
-                self.refresh_tree()
-                # 恢复原始模式
-                self.copy_mode.set(original_mode)
-                if renamed_count > 0:
-                    self.update_history_buttons()
-            except Exception as e:
-                messagebox.showerror("错误", f"重命名过程中出错:\n{str(e)}")
+            
+            dialog.destroy()
+            self._start_rename_current_level_replace(find_text, replace_text)  # 20260402 094929 分片执行：启动本级目录字符替换
                 
         ttk.Button(dialog, text="确定", command=do_rename).pack(pady=10)
 
+    def _start_rename_current_level_replace(self, find_text, replace_text):  # 20260402 094929 新增：本级目录字符替换（分片任务）
+        if getattr(self, "task_running", False):
+            self._show_warning_message("提示", "当前有任务正在执行，请稍后再试。")
+            return
+
+        source_path = self.source_dir.get()
+        self._reset_runtime_warnings()
+        candidates = []
+        try:
+            with os.scandir(source_path) as iterator:
+                for entry in iterator:
+                    if not entry.is_dir(follow_symlinks=False):
+                        continue
+                    name = entry.name
+                    if find_text not in name:
+                        continue
+                    new_name = name.replace(find_text, replace_text)
+                    if new_name == name:
+                        continue
+                    candidates.append((name, new_name))
+        except Exception as e:
+            self._show_error_message("错误", f"无法读取目录:\n{source_path}\n{str(e)}")
+            return
+
+        if not candidates:
+            self._finalize_tree_change(
+                "完成",
+                self._build_rename_summary_message("文件夹", 0, 0, 0, 0),
+                refresh_mode="directories_only",
+                warning_title="重命名提示",
+                update_history=False
+            )
+            return
+
+        self.task_runner = self.TaskRunner(self, description="本级目录字符替换", total=len(candidates))  # 20260402 094929 启动任务
+
+        def step_fn(item, batch_ops):
+            old_name, new_name = item
+            old_path = os.path.join(source_path, old_name)
+            new_path, warning_message = self._prepare_rename_target(source_path, old_name, new_name, "目录")
+            if warning_message:
+                self._add_runtime_warning(warning_message)
+                return "skipped"
+            if new_path is None:
+                return "skipped"
+            try:
+                os.rename(old_path, new_path)
+                batch_ops.append({
+                    'type': 'rename',
+                    'details': {
+                        'old_path': old_path,
+                        'new_path': new_path,
+                        'operation_type': 'rename_current_level'
+                    }
+                })
+            except Exception:
+                self._add_runtime_warning(f"重命名失败：{old_name}")
+                raise
+
+        def on_done(summary):
+            matched_count = len(candidates)
+            renamed_count = summary.get("completed", 0)
+            skipped_count = summary.get("skipped", 0)
+            failed_count = summary.get("failed", 0)
+
+            if summary.get("batch_operations"):
+                desc = "本级目录字符替换" + ("（已取消）" if summary.get("cancelled") else "")
+                self.operation_history.add_operation('batch', {
+                    'description': desc,
+                    'operation_type': 'rename_current_level',
+                    'operations': summary["batch_operations"]
+                })
+                self.update_history_buttons()
+
+            if summary.get("cancelled"):
+                self._show_info_message("提示", f"已取消：完成 {renamed_count} 项，跳过 {skipped_count} 项，失败 {failed_count} 项。")
+
+            self._finalize_tree_change(
+                "完成",
+                self._build_rename_summary_message("文件夹", matched_count, renamed_count, skipped_count, failed_count),
+                refresh_mode="directories_only",
+                warning_title="重命名提示",
+                update_history=renamed_count > 0
+            )
+
+        self.task_runner.start(candidates, step_fn, on_done)
+
     def rename_all_items(self):
         """重命名所有项目"""
-        if not self.source_dir.get():
-            messagebox.showwarning("警告", "请先选择源目录!")
+        if not self._require_source_directory():
             return
             
         dialog, find_var, replace_var = self.create_rename_dialog("全部目录字符替换")
@@ -1547,98 +2431,125 @@ V1.1 功能：
             replace_text = replace_var.get()
             
             if not find_text:
-                messagebox.showwarning("警告", "请输入要查找的字符串!")
+                self._show_warning_message("警告", "请输入要查找的字符串!")
                 return
-                
-            try:
-                renamed_count = [0]
-                
-                def rename_recursive(path):
-                    items = os.listdir(path)
-                    for item in items:
-                        full_path = os.path.join(path, item)
-                        if find_text in item:
-                            new_name = item.replace(find_text, replace_text)
-                            new_path = os.path.join(path, new_name)
-                            try:
-                                os.rename(full_path, new_path)
-                                
-                                # 记录操作到历史
-                                self.operation_history.add_operation('rename', {
-                                    'old_path': full_path,
-                                    'new_path': new_path,
-                                    'operation_type': 'rename_all_items'
-                                })
-                                
-                                renamed_count[0] += 1
-                                full_path = new_path
-                            except Exception as e:
-                                print(f"重命名 '{item}' 失败: {str(e)}")
-                                continue
-                        
-                        if os.path.isdir(full_path):
-                            rename_recursive(full_path)
-                
-                rename_recursive(self.source_dir.get())
-                messagebox.showinfo("完成", f"重命名完成！共重命名 {renamed_count[0]} 个项目。")
-                dialog.destroy()
-                # 临时设置为只显示目录模式以便查看效果
-                original_mode = self.copy_mode.get()
-                self.copy_mode.set("directories_only")
-                self.refresh_tree()
-                # 恢复原始模式
-                self.copy_mode.set(original_mode)
-                if renamed_count[0] > 0:
-                    self.update_history_buttons()
-            except Exception as e:
-                messagebox.showerror("错误", f"重命名过程中出错:\n{str(e)}")
+            
+            dialog.destroy()
+            self._start_rename_all_items_replace(find_text, replace_text)  # 20260402 094929 分片执行：启动全部目录字符替换
                 
         ttk.Button(dialog, text="确定", command=do_rename).pack(pady=10)
 
+    def _start_rename_all_items_replace(self, find_text, replace_text):  # 20260402 094929 新增：全部目录字符替换（分片任务）
+        if getattr(self, "task_running", False):
+            self._show_warning_message("提示", "当前有任务正在执行，请稍后再试。")
+            return
+
+        root_path = self.source_dir.get()
+        self._reset_runtime_warnings()
+        matched_count = {"value": 0}
+        renamed_count = {"value": 0}
+        skipped_count = {"value": 0}
+        failed_count = {"value": 0}
+
+        self.task_runner = self.TaskRunner(self, description="全部目录字符替换")  # 20260402 094929 启动任务（总量不预估）
+
+        def step_fn(dir_path, batch_ops):
+            new_dirs = []
+            try:
+                items = os.listdir(dir_path)
+            except Exception:
+                self._add_runtime_warning(f"无法访问目录：{dir_path}")
+                return ("skipped", new_dirs)
+
+            for item in items:
+                full_path = os.path.join(dir_path, item)
+                is_dir = os.path.isdir(full_path)
+                current_path = full_path
+
+                if find_text in item:
+                    new_name = item.replace(find_text, replace_text)
+                    if new_name != item:
+                        matched_count["value"] += 1
+                        new_path, warning_message = self._prepare_rename_target(dir_path, item, new_name, "项目")
+                        if warning_message:
+                            skipped_count["value"] += 1
+                            self._add_runtime_warning(warning_message)
+                        elif new_path is None:
+                            skipped_count["value"] += 1
+                        else:
+                            try:
+                                os.rename(full_path, new_path)
+                                batch_ops.append({
+                                    'type': 'rename',
+                                    'details': {
+                                        'old_path': full_path,
+                                        'new_path': new_path,
+                                        'operation_type': 'rename_all_items'
+                                    }
+                                })
+                                renamed_count["value"] += 1
+                                current_path = new_path
+                            except Exception:
+                                failed_count["value"] += 1
+                                self._add_runtime_warning(f"重命名失败：{item}")
+                                continue
+
+                if is_dir:
+                    new_dirs.append(current_path)
+
+                self._process_pending_ui()
+
+            return ("processed", new_dirs)
+
+        def on_done(summary):
+            if summary.get("batch_operations"):
+                desc = "全部目录字符替换" + ("（已取消）" if summary.get("cancelled") else "")
+                self.operation_history.add_operation('batch', {
+                    'description': desc,
+                    'operation_type': 'rename_all_items',
+                    'operations': summary["batch_operations"]
+                })
+                self.update_history_buttons()
+
+            if summary.get("cancelled"):
+                self._show_info_message("提示", f"已取消：成功 {renamed_count['value']} 项，跳过 {skipped_count['value']} 项，失败 {failed_count['value']} 项。")
+
+            self._finalize_tree_change(
+                "完成",
+                self._build_rename_summary_message("项目", matched_count["value"], renamed_count["value"], skipped_count["value"], failed_count["value"]),
+                refresh_mode="directories_only",
+                warning_title="重命名提示",
+                update_history=renamed_count["value"] > 0
+            )
+
+        self.task_runner.start([root_path], step_fn, on_done)
+
     def multi_rename_current_level(self):
         """批量重命名本级目录"""
-        if not self.source_dir.get():
-            messagebox.showwarning("警告", "请先选择源目录!")
+        if not self._require_source_directory():
             return
             
-        # 获取本级目录列表
-        source_path = self.source_dir.get()
-        directories = []
-        try:
-            for item in os.listdir(source_path):
-                full_path = os.path.join(source_path, item)
-                if os.path.isdir(full_path):
-                    directories.append(item)
-        except Exception as e:
-            messagebox.showerror("错误", f"无法读取目录: {str(e)}")
+        directories = self._get_source_items("directory")
+        if directories is None:
             return
             
         if not directories:
-            messagebox.showinfo("提示", "当前目录下没有子目录!")
+            self._show_info_message("提示", "当前目录下没有子目录!")
             return
             
         self.create_multi_rename_dialog(directories)
         
     def multi_rename_current_files(self):
         """批量重命名本级文件"""
-        if not self.source_dir.get():
-            messagebox.showwarning("警告", "请先选择源目录!")
+        if not self._require_source_directory():
             return
             
-        # 获取本级文件列表
-        source_path = self.source_dir.get()
-        files = []
-        try:
-            for item in os.listdir(source_path):
-                full_path = os.path.join(source_path, item)
-                if os.path.isfile(full_path):
-                    files.append(item)
-        except Exception as e:
-            messagebox.showerror("错误", f"无法读取目录: {str(e)}")
+        files = self._get_source_items("file")
+        if files is None:
             return
             
         if not files:
-            messagebox.showinfo("提示", "当前目录下没有文件!")
+            self._show_info_message("提示", "当前目录下没有文件!")
             return
             
         self.create_multi_rename_file_dialog(files)
@@ -1683,20 +2594,21 @@ V1.1 功能：
         
         ttk.Label(select_frame, text="项目选择:", font=("TkDefaultFont", 10, "bold")).grid(row=0, column=0, sticky='w')
         
-        # 创建复选框变量
-        self.prefix_num_var = tk.BooleanVar()
-        self.prefix_conn_var = tk.BooleanVar()
-        self.prefix_text_var = tk.BooleanVar()
-        self.suffix_text_var = tk.BooleanVar()
-        self.suffix_conn_var = tk.BooleanVar()
-        self.suffix_num_var = tk.BooleanVar()
+        controls = {
+            "prefix_num_var": tk.BooleanVar(),
+            "prefix_conn_var": tk.BooleanVar(),
+            "prefix_text_var": tk.BooleanVar(),
+            "suffix_text_var": tk.BooleanVar(),
+            "suffix_conn_var": tk.BooleanVar(),
+            "suffix_num_var": tk.BooleanVar(),
+        }
         
-        ttk.Checkbutton(select_frame, text="前序号", variable=self.prefix_num_var).grid(row=0, column=1, padx=(10,20))
-        ttk.Checkbutton(select_frame, text="前连接符", variable=self.prefix_conn_var).grid(row=0, column=2, padx=(10,20))
-        ttk.Checkbutton(select_frame, text="前缀字符", variable=self.prefix_text_var).grid(row=0, column=3, padx=10)
-        ttk.Checkbutton(select_frame, text="后缀字符", variable=self.suffix_text_var).grid(row=0, column=6, padx=(180,20))
-        ttk.Checkbutton(select_frame, text="后连接符", variable=self.suffix_conn_var).grid(row=0, column=7, padx=20)
-        ttk.Checkbutton(select_frame, text="后序号", variable=self.suffix_num_var).grid(row=0, column=8, padx=10)
+        ttk.Checkbutton(select_frame, text="前序号", variable=controls["prefix_num_var"]).grid(row=0, column=1, padx=(10,20))
+        ttk.Checkbutton(select_frame, text="前连接符", variable=controls["prefix_conn_var"]).grid(row=0, column=2, padx=(10,20))
+        ttk.Checkbutton(select_frame, text="前缀字符", variable=controls["prefix_text_var"]).grid(row=0, column=3, padx=10)
+        ttk.Checkbutton(select_frame, text="后缀字符", variable=controls["suffix_text_var"]).grid(row=0, column=6, padx=(180,20))
+        ttk.Checkbutton(select_frame, text="后连接符", variable=controls["suffix_conn_var"]).grid(row=0, column=7, padx=20)
+        ttk.Checkbutton(select_frame, text="后序号", variable=controls["suffix_num_var"]).grid(row=0, column=8, padx=10)
         
         # 目录新名输入框架
         input_frame = ttk.Frame(main_frame)
@@ -1706,37 +2618,37 @@ V1.1 功能：
         
         # 序号类型选项
         num_options = ["1", "A", "a", "Ⅰ"]
-        self.prefix_num_combo = ttk.Combobox(input_frame, values=num_options, width=5, state="readonly")
-        self.prefix_num_combo.grid(row=0, column=1, padx=(10,20))
-        self.prefix_num_combo.set("1")
+        controls["prefix_num_combo"] = ttk.Combobox(input_frame, values=num_options, width=5, state="readonly")
+        controls["prefix_num_combo"].grid(row=0, column=1, padx=(10,20))
+        controls["prefix_num_combo"].set("1")
         
         # 连接符选项
         conn_options = [".", "_", "-", "–", "—", "•"]
-        self.prefix_conn_combo = ttk.Combobox(input_frame, values=conn_options, width=5, state="readonly")
-        self.prefix_conn_combo.grid(row=0, column=2, padx=10)
-        self.prefix_conn_combo.set(".")
+        controls["prefix_conn_combo"] = ttk.Combobox(input_frame, values=conn_options, width=5, state="readonly")
+        controls["prefix_conn_combo"].grid(row=0, column=2, padx=10)
+        controls["prefix_conn_combo"].set(".")
         
         # 前缀文本输入框
-        self.prefix_text_entry = ttk.Entry(input_frame, width=12)
-        self.prefix_text_entry.grid(row=0, column=3, padx=(20,10))
+        controls["prefix_text_entry"] = ttk.Entry(input_frame, width=12)
+        controls["prefix_text_entry"].grid(row=0, column=3, padx=(20,10))
         
         # 添加说明文字
         note_label = ttk.Label(input_frame, text="+ 目录原名称 +", font=("TkDefaultFont", 10))
         note_label.grid(row=0, column=4, padx=0)
         
         # 后缀文本输入框
-        self.suffix_text_entry = ttk.Entry(input_frame, width=12)
-        self.suffix_text_entry.grid(row=0, column=6, padx=10)
+        controls["suffix_text_entry"] = ttk.Entry(input_frame, width=12)
+        controls["suffix_text_entry"].grid(row=0, column=6, padx=10)
         
         # 后连接符选项
-        self.suffix_conn_combo = ttk.Combobox(input_frame, values=conn_options, width=5, state="readonly")
-        self.suffix_conn_combo.grid(row=0, column=7, padx=20)
-        self.suffix_conn_combo.set(".")
+        controls["suffix_conn_combo"] = ttk.Combobox(input_frame, values=conn_options, width=5, state="readonly")
+        controls["suffix_conn_combo"].grid(row=0, column=7, padx=20)
+        controls["suffix_conn_combo"].set(".")
         
         # 后序号类型选项
-        self.suffix_num_combo = ttk.Combobox(input_frame, values=num_options, width=5, state="readonly")
-        self.suffix_num_combo.grid(row=0, column=8, padx=10)
-        self.suffix_num_combo.set("1")
+        controls["suffix_num_combo"] = ttk.Combobox(input_frame, values=num_options, width=5, state="readonly")
+        controls["suffix_num_combo"].grid(row=0, column=8, padx=10)
+        controls["suffix_num_combo"].set("1")
         
         # 按钮框架
         button_frame = ttk.Frame(main_frame)
@@ -1744,88 +2656,91 @@ V1.1 功能：
         
         def do_multi_rename():
             try:
-                self.execute_multi_rename(directories)
+                self.execute_multi_rename(directories, controls)
                 dialog.destroy()
             except Exception as e:
-                messagebox.showerror("错误", f"重命名过程中出错: {str(e)}")
+                self._show_error_message("错误", f"重命名过程中出错: {str(e)}")
         
         ttk.Button(button_frame, text="确定", command=do_multi_rename).pack(side=tk.LEFT, padx=10)
         ttk.Button(button_frame, text="取消", command=dialog.destroy).pack(side=tk.LEFT, padx=10)
         
-    def execute_multi_rename(self, directories):
+    def execute_multi_rename(self, directories, controls=None):
         """执行批量重命名"""
+        if getattr(self, "task_running", False):
+            self._show_warning_message("提示", "当前有任务正在执行，请稍后再试。")
+            return  # 20260402 094929 避免并发任务导致状态混乱
+
         source_path = self.source_dir.get()
-        renamed_count = 0
-        
+        self._reset_runtime_warnings()
+        controls = self._resolve_multi_rename_controls(controls, "directory")
+        plans = []
         for i, dir_name in enumerate(directories):
-            new_name = dir_name
-            
-            # 构建新名称
-            prefix_parts = []
-            suffix_parts = []
-            
-            # 前序号
-            if self.prefix_num_var.get():
-                num_type = self.prefix_num_combo.get()
-                prefix_parts.append(self.generate_sequence_number(i + 1, num_type))
-            
-            # 前连接符
-            if self.prefix_conn_var.get():
-                prefix_parts.append(self.prefix_conn_combo.get())
-            
-            # 前缀字符
-            if self.prefix_text_var.get():
-                prefix_text = self.prefix_text_entry.get().strip()
-                if prefix_text:
-                    prefix_parts.append(prefix_text)
-            
-            # 后缀字符
-            if self.suffix_text_var.get():
-                suffix_text = self.suffix_text_entry.get().strip()
-                if suffix_text:
-                    suffix_parts.append(suffix_text)
-            
-            # 后连接符
-            if self.suffix_conn_var.get():
-                suffix_parts.append(self.suffix_conn_combo.get())
-            
-            # 后序号
-            if self.suffix_num_var.get():
-                num_type = self.suffix_num_combo.get()
-                suffix_parts.append(self.generate_sequence_number(i + 1, num_type))
-            
-            # 组合新名称
-            new_name = "".join(prefix_parts) + dir_name + "".join(suffix_parts)
-            
-            # 执行重命名
+            new_name = self._build_multi_rename_name(dir_name, i + 1, controls)
             if new_name != dir_name:
-                old_path = os.path.join(source_path, dir_name)
-                new_path = os.path.join(source_path, new_name)
-                
-                # 检查新名称是否已存在
-                if os.path.exists(new_path):
-                    messagebox.showwarning("警告", f"目录 '{new_name}' 已存在，跳过重命名 '{dir_name}'")
-                    continue
-                
-                # 执行重命名操作
-                try:
-                    os.rename(old_path, new_path)
-                    
-                    # 记录操作到历史
-                    self.operation_history.add_operation('rename', {
+                plans.append((dir_name, new_name))
+
+        if not plans:
+            self._finalize_tree_change(
+                "完成",
+                self._build_rename_summary_message("目录", 0, 0, 0, 0),
+                refresh_mode="directories_only",
+                warning_title="重命名提示",
+                update_history=False
+            )
+            return
+
+        self.task_runner = self.TaskRunner(self, description="多维重命名本级目录名", total=len(plans))  # 20260402 094929 分片执行
+
+        def step_fn(item, batch_ops):
+            dir_name, new_name = item
+            old_path = os.path.join(source_path, dir_name)
+            new_path, warning_message = self._prepare_rename_target(source_path, dir_name, new_name, "目录")
+            if warning_message:
+                self._add_runtime_warning(warning_message)
+                return "skipped"
+            if new_path is None:
+                return "skipped"
+            try:
+                os.rename(old_path, new_path)
+                batch_ops.append({
+                    'type': 'rename',
+                    'details': {
                         'old_path': old_path,
                         'new_path': new_path,
                         'operation_type': 'multi_rename_directory'
-                    })
-                    
-                    renamed_count += 1
-                except Exception as e:
-                    messagebox.showerror("错误", f"重命名 '{dir_name}' 失败: {str(e)}")
-                    continue
-        
-        messagebox.showinfo("完成", f"批量重命名完成！共重命名 {renamed_count} 个目录。")
-        self.refresh_tree()
-        self.update_history_buttons()
+                    }
+                })
+            except Exception:
+                self._add_runtime_warning(f"重命名失败：{dir_name}")
+                raise
+
+        def on_done(summary):
+            matched_count = len(plans)
+            renamed_count = summary.get("completed", 0)
+            skipped_count = summary.get("skipped", 0)
+            failed_count = summary.get("failed", 0)
+
+            if summary.get("batch_operations"):
+                desc = "多维重命名本级目录名" + ("（已取消）" if summary.get("cancelled") else "")
+                self.operation_history.add_operation('batch', {
+                    'description': desc,
+                    'operation_type': 'multi_rename_directory',
+                    'operations': summary["batch_operations"]
+                })
+                self.update_history_buttons()
+
+            if summary.get("cancelled"):
+                self._show_info_message("提示", f"已取消：完成 {renamed_count} 项，跳过 {skipped_count} 项，失败 {failed_count} 项。")
+
+            self._finalize_tree_change(
+                "完成",
+                self._build_rename_summary_message("目录", matched_count, renamed_count, skipped_count, failed_count),
+                refresh_mode="directories_only",
+                warning_title="重命名提示",
+                update_history=renamed_count > 0
+            )
+
+        self.task_runner.start(plans, step_fn, on_done)
         
     def create_multi_rename_file_dialog(self, files):
         """创建批量文件重命名对话框"""
@@ -1867,20 +2782,21 @@ V1.1 功能：
         
         ttk.Label(select_frame, text="项目选择:", font=("TkDefaultFont", 10, "bold")).grid(row=0, column=0, sticky='w')
         
-        # 创建复选框变量（文件重命名用）
-        self.file_prefix_num_var = tk.BooleanVar()
-        self.file_prefix_conn_var = tk.BooleanVar()
-        self.file_prefix_text_var = tk.BooleanVar()
-        self.file_suffix_text_var = tk.BooleanVar()
-        self.file_suffix_conn_var = tk.BooleanVar()
-        self.file_suffix_num_var = tk.BooleanVar()
+        controls = {
+            "prefix_num_var": tk.BooleanVar(),
+            "prefix_conn_var": tk.BooleanVar(),
+            "prefix_text_var": tk.BooleanVar(),
+            "suffix_text_var": tk.BooleanVar(),
+            "suffix_conn_var": tk.BooleanVar(),
+            "suffix_num_var": tk.BooleanVar(),
+        }
         
-        ttk.Checkbutton(select_frame, text="前序号", variable=self.file_prefix_num_var).grid(row=0, column=1, padx=(10,20))
-        ttk.Checkbutton(select_frame, text="前连接符", variable=self.file_prefix_conn_var).grid(row=0, column=2, padx=(10,20))
-        ttk.Checkbutton(select_frame, text="前缀字符", variable=self.file_prefix_text_var).grid(row=0, column=3, padx=10)
-        ttk.Checkbutton(select_frame, text="后缀字符", variable=self.file_suffix_text_var).grid(row=0, column=6, padx=(180,20))
-        ttk.Checkbutton(select_frame, text="后连接符", variable=self.file_suffix_conn_var).grid(row=0, column=7, padx=20)
-        ttk.Checkbutton(select_frame, text="后序号", variable=self.file_suffix_num_var).grid(row=0, column=8, padx=10)
+        ttk.Checkbutton(select_frame, text="前序号", variable=controls["prefix_num_var"]).grid(row=0, column=1, padx=(10,20))
+        ttk.Checkbutton(select_frame, text="前连接符", variable=controls["prefix_conn_var"]).grid(row=0, column=2, padx=(10,20))
+        ttk.Checkbutton(select_frame, text="前缀字符", variable=controls["prefix_text_var"]).grid(row=0, column=3, padx=10)
+        ttk.Checkbutton(select_frame, text="后缀字符", variable=controls["suffix_text_var"]).grid(row=0, column=6, padx=(180,20))
+        ttk.Checkbutton(select_frame, text="后连接符", variable=controls["suffix_conn_var"]).grid(row=0, column=7, padx=20)
+        ttk.Checkbutton(select_frame, text="后序号", variable=controls["suffix_num_var"]).grid(row=0, column=8, padx=10)
         
         # 文件新名输入框架
         input_frame = ttk.Frame(main_frame)
@@ -1890,37 +2806,37 @@ V1.1 功能：
         
         # 序号类型选项
         num_options = ["1", "A", "a", "Ⅰ"]
-        self.file_prefix_num_combo = ttk.Combobox(input_frame, values=num_options, width=5, state="readonly")
-        self.file_prefix_num_combo.grid(row=0, column=1, padx=(10,20))
-        self.file_prefix_num_combo.set("1")
+        controls["prefix_num_combo"] = ttk.Combobox(input_frame, values=num_options, width=5, state="readonly")
+        controls["prefix_num_combo"].grid(row=0, column=1, padx=(10,20))
+        controls["prefix_num_combo"].set("1")
         
         # 连接符选项
         conn_options = [".", "_", "-", "–", "—", "•"]
-        self.file_prefix_conn_combo = ttk.Combobox(input_frame, values=conn_options, width=5, state="readonly")
-        self.file_prefix_conn_combo.grid(row=0, column=2, padx=10)
-        self.file_prefix_conn_combo.set(".")
+        controls["prefix_conn_combo"] = ttk.Combobox(input_frame, values=conn_options, width=5, state="readonly")
+        controls["prefix_conn_combo"].grid(row=0, column=2, padx=10)
+        controls["prefix_conn_combo"].set(".")
         
         # 前缀文本输入框
-        self.file_prefix_text_entry = ttk.Entry(input_frame, width=12)
-        self.file_prefix_text_entry.grid(row=0, column=3, padx=(20,10))
+        controls["prefix_text_entry"] = ttk.Entry(input_frame, width=12)
+        controls["prefix_text_entry"].grid(row=0, column=3, padx=(20,10))
         
         # 添加说明文字
         note_label = ttk.Label(input_frame, text="+ 文件原名称 +", font=("TkDefaultFont", 10))
         note_label.grid(row=0, column=4, padx=0)
         
         # 后缀文本输入框
-        self.file_suffix_text_entry = ttk.Entry(input_frame, width=12)
-        self.file_suffix_text_entry.grid(row=0, column=6, padx=10)
+        controls["suffix_text_entry"] = ttk.Entry(input_frame, width=12)
+        controls["suffix_text_entry"].grid(row=0, column=6, padx=10)
         
         # 后连接符选项
-        self.file_suffix_conn_combo = ttk.Combobox(input_frame, values=conn_options, width=5, state="readonly")
-        self.file_suffix_conn_combo.grid(row=0, column=7, padx=20)
-        self.file_suffix_conn_combo.set(".")
+        controls["suffix_conn_combo"] = ttk.Combobox(input_frame, values=conn_options, width=5, state="readonly")
+        controls["suffix_conn_combo"].grid(row=0, column=7, padx=20)
+        controls["suffix_conn_combo"].set(".")
         
         # 后序号类型选项
-        self.file_suffix_num_combo = ttk.Combobox(input_frame, values=num_options, width=5, state="readonly")
-        self.file_suffix_num_combo.grid(row=0, column=8, padx=10)
-        self.file_suffix_num_combo.set("1")
+        controls["suffix_num_combo"] = ttk.Combobox(input_frame, values=num_options, width=5, state="readonly")
+        controls["suffix_num_combo"].grid(row=0, column=8, padx=10)
+        controls["suffix_num_combo"].set("1")
         
         # 按钮框架
         button_frame = ttk.Frame(main_frame)
@@ -1928,89 +2844,92 @@ V1.1 功能：
         
         def do_multi_file_rename():
             try:
-                self.execute_multi_file_rename(files)
+                self.execute_multi_file_rename(files, controls)
                 dialog.destroy()
             except Exception as e:
-                messagebox.showerror("错误", f"重命名过程中出错: {str(e)}")
+                self._show_error_message("错误", f"重命名过程中出错: {str(e)}")
         
         ttk.Button(button_frame, text="确定", command=do_multi_file_rename).pack(side=tk.LEFT, padx=10)
         ttk.Button(button_frame, text="取消", command=dialog.destroy).pack(side=tk.LEFT, padx=10)
         
-    def execute_multi_file_rename(self, files):
+    def execute_multi_file_rename(self, files, controls=None):
         """执行批量文件重命名"""
+        if getattr(self, "task_running", False):
+            self._show_warning_message("提示", "当前有任务正在执行，请稍后再试。")
+            return  # 20260402 094929 避免并发任务导致状态混乱
+
         source_path = self.source_dir.get()
-        renamed_count = 0
-        
+        self._reset_runtime_warnings()
+        controls = self._resolve_multi_rename_controls(controls, "file")
+        plans = []
         for i, file_name in enumerate(files):
-            # 分离文件名和扩展名
             name_part, ext_part = os.path.splitext(file_name)
-            
-            # 构建新名称
-            prefix_parts = []
-            suffix_parts = []
-            
-            # 前序号
-            if self.file_prefix_num_var.get():
-                num_type = self.file_prefix_num_combo.get()
-                prefix_parts.append(self.generate_sequence_number(i + 1, num_type))
-            
-            # 前连接符
-            if self.file_prefix_conn_var.get():
-                prefix_parts.append(self.file_prefix_conn_combo.get())
-            
-            # 前缀字符
-            if self.file_prefix_text_var.get():
-                prefix_text = self.file_prefix_text_entry.get().strip()
-                if prefix_text:
-                    prefix_parts.append(prefix_text)
-            
-            # 后缀字符
-            if self.file_suffix_text_var.get():
-                suffix_text = self.file_suffix_text_entry.get().strip()
-                if suffix_text:
-                    suffix_parts.append(suffix_text)
-            
-            # 后连接符
-            if self.file_suffix_conn_var.get():
-                suffix_parts.append(self.file_suffix_conn_combo.get())
-            
-            # 后序号
-            if self.file_suffix_num_var.get():
-                num_type = self.file_suffix_num_combo.get()
-                suffix_parts.append(self.generate_sequence_number(i + 1, num_type))
-            
-            # 组合新名称（保留原扩展名）
-            new_name = "".join(prefix_parts) + name_part + "".join(suffix_parts) + ext_part
-            
-            # 执行重命名
+            new_name = self._build_multi_rename_name(name_part, i + 1, controls, ext_part)
             if new_name != file_name:
-                old_path = os.path.join(source_path, file_name)
-                new_path = os.path.join(source_path, new_name)
-                
-                # 检查新名称是否已存在
-                if os.path.exists(new_path):
-                    messagebox.showwarning("警告", f"文件 '{new_name}' 已存在，跳过重命名 '{file_name}'")
-                    continue
-                
-                # 执行重命名操作
-                try:
-                    os.rename(old_path, new_path)
-                    
-                    # 记录操作到历史
-                    self.operation_history.add_operation('rename', {
+                plans.append((file_name, new_name))
+
+        if not plans:
+            self._finalize_tree_change(
+                "完成",
+                self._build_rename_summary_message("文件", 0, 0, 0, 0),
+                refresh_mode="files_only",
+                warning_title="重命名提示",
+                update_history=False
+            )
+            return
+
+        self.task_runner = self.TaskRunner(self, description="多维重命名本级文件名", total=len(plans))  # 20260402 094929 分片执行
+
+        def step_fn(item, batch_ops):
+            file_name, new_name = item
+            old_path = os.path.join(source_path, file_name)
+            new_path, warning_message = self._prepare_rename_target(source_path, file_name, new_name, "文件")
+            if warning_message:
+                self._add_runtime_warning(warning_message)
+                return "skipped"
+            if new_path is None:
+                return "skipped"
+            try:
+                os.rename(old_path, new_path)
+                batch_ops.append({
+                    'type': 'rename',
+                    'details': {
                         'old_path': old_path,
                         'new_path': new_path,
                         'operation_type': 'multi_rename_file'
-                    })
-                    
-                    renamed_count += 1
-                except Exception as e:
-                    messagebox.showerror("错误", f"重命名 '{file_name}' 失败: {str(e)}")
-                    continue
-        
-        messagebox.showinfo("完成", f"批量重命名完成！共重命名 {renamed_count} 个文件。")
-        self.refresh_tree()
-        self.update_history_buttons()
+                    }
+                })
+            except Exception:
+                self._add_runtime_warning(f"重命名失败：{file_name}")
+                raise
+
+        def on_done(summary):
+            matched_count = len(plans)
+            renamed_count = summary.get("completed", 0)
+            skipped_count = summary.get("skipped", 0)
+            failed_count = summary.get("failed", 0)
+
+            if summary.get("batch_operations"):
+                desc = "多维重命名本级文件名" + ("（已取消）" if summary.get("cancelled") else "")
+                self.operation_history.add_operation('batch', {
+                    'description': desc,
+                    'operation_type': 'multi_rename_file',
+                    'operations': summary["batch_operations"]
+                })
+                self.update_history_buttons()
+
+            if summary.get("cancelled"):
+                self._show_info_message("提示", f"已取消：完成 {renamed_count} 项，跳过 {skipped_count} 项，失败 {failed_count} 项。")
+
+            self._finalize_tree_change(
+                "完成",
+                self._build_rename_summary_message("文件", matched_count, renamed_count, skipped_count, failed_count),
+                refresh_mode="files_only",
+                warning_title="重命名提示",
+                update_history=renamed_count > 0
+            )
+
+        self.task_runner.start(plans, step_fn, on_done)
         
     def generate_sequence_number(self, index, num_type):
         """生成序列号"""
@@ -2054,24 +2973,12 @@ V1.1 功能：
             if os.path.isfile(path):
                 # 文件大小
                 size_bytes = os.path.getsize(path)
-                size_kb = size_bytes / 1024
-                return f"{size_kb:.1f}" if size_kb >= 0.1 else "0.1"
+                return self._format_size_in_kb(size_bytes)
             elif os.path.isdir(path):
-                # 目录大小（递归计算所有文件）
-                total_size = 0
-                try:
-                    for dirpath, dirnames, filenames in os.walk(path):
-                        for filename in filenames:
-                            filepath = os.path.join(dirpath, filename)
-                            try:
-                                total_size += os.path.getsize(filepath)
-                            except (OSError, IOError):
-                                # 跳过无法访问的文件
-                                continue
-                    size_kb = total_size / 1024
-                    return f"{size_kb:.1f}" if size_kb >= 0.1 else "0.1"
-                except (OSError, IOError):
+                total_size = self.directory_size_cache.get(path)
+                if total_size is None:
                     return "N/A"
+                return self._format_size_in_kb(total_size)
             else:
                 return "N/A"
         except (OSError, IOError):
@@ -2079,45 +2986,113 @@ V1.1 功能：
     
     def advanced_rename_directories(self):
         """全部目录名修改 - 支持通配符和正则表达式"""
-        if not self.source_dir.get():
-            messagebox.showwarning("警告", "请先选择源目录!")
+        if not self._require_source_directory():
             return
         
-        # 保存当前模式
-        original_mode = self.copy_mode.get()
-        # 临时切换到只显示目录的模式
-        self.copy_mode.set("single_level")
-        # 刷新树形视图以只显示目录
-        self.refresh_tree()
+        self.refresh_tree("directories_only")
         
         # 创建对话框
         self.create_advanced_rename_dialog("全部目录名修改", "directory")
         
-        # 恢复原始模式
-        self.copy_mode.set(original_mode)
-        # 刷新树形视图恢复原始显示
         self.refresh_tree()
     
     def advanced_rename_files(self):
-        """全部文件名修改 - 支持通配符和正则表达式"""
-        if not self.source_dir.get():
-            messagebox.showwarning("警告", "请先选择源目录!")
+        """文件名称修改 - 基于已勾选文件，支持精确匹配、通配符和正则表达式"""
+        if not self._require_source_directory():
             return
-        
-        # 保存当前模式
-        original_mode = self.copy_mode.get()
-        # 临时切换到显示文件的模式
-        self.copy_mode.set("export_names")
-        # 刷新树形视图以显示文件
-        self.refresh_tree()
-        
-        # 创建对话框
-        self.create_advanced_rename_dialog("全部文件名修改", "file")
-        
-        # 恢复原始模式
-        self.copy_mode.set(original_mode)
-        # 刷新树形视图恢复原始显示
-        self.refresh_tree()
+
+        # 20260828 104445 不再刷新目录树，避免清空用户已勾选的文件
+        selected_files = self.get_checked_file_paths()
+        if not selected_files:
+            self._show_warning_message(
+                "提示",
+                "请先选择需要修改文件名的文件！\n\n"
+                "操作步骤：\n"
+                "1. 在“复制选定目录和文件”模式下浏览源目录；\n"
+                "2. 逐个勾选需要修改文件名的文件，或点击下方的“全选”按钮；\n"
+                "3. 再点击“文件名称修改”按钮。"
+            )
+            return
+
+        # 创建文件名修改对话框（仅处理已勾选的文件）
+        self.create_file_rename_dialog(selected_files)
+    
+    def get_checked_file_paths(self):
+        """获取当前已勾选的文件完整路径列表（仅文件，不含目录）"""
+        files = []
+        for item_id in list(self.checked_items):
+            path = self.tree_item_paths.get(item_id)
+            if path and os.path.isfile(path):
+                files.append(path)
+        # 20260828 104445 去重并按路径排序，保证处理顺序稳定
+        return sorted(set(files), key=lambda p: p.lower())
+    
+    def _make_matcher(self, find_pattern, replace_text, mode, case_sensitive, glob_replace=False):
+        """根据匹配模式创建匹配函数，返回 match_item(name)->(matched, new_name)
+        glob_replace=True（仅文件名称修改对话框使用）时，通配符替换为直观语义：
+        替换为中的 * 和 ? 表示原文件名中对应位置匹配到的内容，例如 *.txt 替换为 *.md 可将 a.txt 改为 a.md"""
+        import re
+        import fnmatch
+        if mode == "wildcard" and glob_replace:
+            # 20260828 104445 通配符直观替换：将查找通配符转成捕获组，替换为中的 * / ? 按位置取回捕获内容
+            flags = (0 if case_sensitive else re.IGNORECASE) | re.DOTALL
+            regex_parts = []
+            for ch in find_pattern:
+                if ch == '*':
+                    regex_parts.append('(.*)')
+                elif ch == '?':
+                    regex_parts.append('(.)')
+                else:
+                    regex_parts.append(re.escape(ch))
+            wildcard_regex = re.compile(''.join(regex_parts) + r'\Z', flags)
+
+            def match_item(name):
+                m = wildcard_regex.fullmatch(name)
+                if m is None:
+                    return False, name
+                groups = m.groups()
+                parts = []
+                gi = 0
+                for ch in replace_text:
+                    if ch in ('*', '?'):
+                        if gi < len(groups):
+                            parts.append(groups[gi])
+                        gi += 1
+                    else:
+                        parts.append(ch)
+                return True, ''.join(parts)
+        elif mode == "exact":
+            if case_sensitive:
+                def match_item(name):
+                    matched = name == find_pattern
+                    return matched, replace_text if matched else name
+            else:
+                pattern_lower = find_pattern.lower()
+
+                def match_item(name):
+                    matched = name.lower() == pattern_lower
+                    return matched, replace_text if matched else name
+        elif mode == "wildcard":
+            flags = 0 if case_sensitive else re.IGNORECASE
+            wildcard_regex = re.compile(fnmatch.translate(find_pattern), flags)
+
+            def match_item(name):
+                matched = wildcard_regex.fullmatch(name) is not None
+                return matched, wildcard_regex.sub(replace_text, name, count=1) if matched else name
+        elif mode == "regex":
+            flags = 0 if case_sensitive else re.IGNORECASE
+            try:
+                regex_pattern = re.compile(find_pattern, flags)
+            except re.error as e:
+                raise Exception(f"正则表达式错误: {str(e)}")
+
+            def match_item(name):
+                matched = regex_pattern.search(name) is not None
+                return matched, regex_pattern.sub(replace_text, name) if matched else name
+        else:
+            def match_item(name):
+                return False, name
+        return match_item
     
     def create_advanced_rename_dialog(self, title, target_type):
         """创建高级重命名对话框"""
@@ -2161,8 +3136,8 @@ V1.1 功能：
         
         help_text = (
             "匹配模式说明:\n"
-            "• 精确匹配：完全匹配指定字符串\n"
-            "• 通配符匹配：支持 * (任意字符) 和 ? (单个字符)\n"
+            "• 精确匹配：仅当名称与指定字符串完全一致时匹配\n"
+            "• 通配符匹配：按完整名称匹配，支持 * (任意字符) 和 ? (单个字符)\n"
             "• 正则表达式：支持完整的正则表达式语法"
         )
         help_label = ttk.Label(help_frame, text=help_text, font=("TkDefaultFont", 9), foreground="#666666")
@@ -2206,7 +3181,7 @@ V1.1 功能：
             preview = preview_mode.get()
             
             if not find_pattern:
-                messagebox.showwarning("警告", "请输入查找模式!")
+                self._show_warning_message("警告", "请输入查找模式!")
                 return
             
             try:
@@ -2215,7 +3190,7 @@ V1.1 功能：
                     dialog.destroy()
                     self.refresh_tree()
             except Exception as e:
-                messagebox.showerror("错误", f"操作过程中出错:\n{str(e)}")
+                self._show_error_message("错误", f"操作过程中出错:\n{str(e)}")
         
         # 创建按钮并居中显示
         button_container = ttk.Frame(button_frame)
@@ -2253,126 +3228,397 @@ V1.1 功能：
         
         dialog.geometry(f"{dialog_width}x{dialog_height}+{x}+{y}")
     
-    def execute_advanced_rename(self, find_pattern, replace_text, mode, case_sensitive, preview_mode, target_type):
+    def create_file_rename_dialog(self, selected_paths):
+        """创建文件名称修改对话框（仅针对已勾选的文件，提供实时匹配数量提示）"""
+        dialog = tk.Toplevel(self.root)
+        dialog.title("文件名称修改")
+
+        # 设置对话框的最小尺寸，确保按钮始终可见
+        dialog.minsize(600, 460)
+        dialog.resizable(True, True)
+        dialog.transient(self.root)
+        dialog.grab_set()
+
+        dialog.grid_rowconfigure(0, weight=1)
+        dialog.grid_columnconfigure(0, weight=1)
+
+        main_frame = ttk.Frame(dialog, padding="15")
+        main_frame.grid(row=0, column=0, sticky='nsew')
+        main_frame.grid_columnconfigure(0, weight=1)
+
+        # 标题与已选文件数量
+        title_frame = ttk.Frame(main_frame)
+        title_frame.grid(row=0, column=0, sticky='ew', pady=(0, 10))
+        ttk.Label(title_frame, text="文件名称修改", font=("TkDefaultFont", 12, "bold")).pack(side=tk.LEFT)
+        ttk.Label(title_frame, text=f"已选择 {len(selected_paths)} 个文件", foreground="#3366CC").pack(side=tk.RIGHT)
+
+        # 匹配模式
+        match_mode = tk.StringVar(value="exact")
+        mode_frame = ttk.LabelFrame(main_frame, text="匹配模式", padding="10")
+        mode_frame.grid(row=1, column=0, sticky='ew', pady=(0, 10))
+
+        ttk.Radiobutton(mode_frame, text="精确匹配", value="exact", variable=match_mode).grid(row=0, column=0, sticky='w', padx=(0, 20))
+        ttk.Radiobutton(mode_frame, text="通配符匹配", value="wildcard", variable=match_mode).grid(row=0, column=1, sticky='w', padx=(0, 20))
+        ttk.Radiobutton(mode_frame, text="正则表达式", value="regex", variable=match_mode).grid(row=0, column=2, sticky='w')
+
+        mode_desc_var = tk.StringVar()
+        ttk.Label(mode_frame, textvariable=mode_desc_var, font=("TkDefaultFont", 9), foreground="#666666", wraplength=560).grid(row=1, column=0, columnspan=3, sticky='w', pady=(6, 0))
+
+        mode_descriptions = {
+            "exact": "说明：仅当文件名（含扩展名）与“查找内容”完全一致时才进行替换。",
+            "wildcard": "说明：按整个文件名匹配，支持 *（任意多个字符）和 ?（单个字符）。替换为中的 * 和 ? 表示原文件名中对应位置的内容，例如 *.txt 替换为 *.md，可将 a.txt 改为 a.md。",
+            "regex": r"说明：按正则表达式匹配，支持字符类、分组等高级语法，例如 ^IMG_\d+ 可匹配 IMG_1、IMG_2 等。",
+        }
+
+        # 查找和替换输入
+        input_frame = ttk.LabelFrame(main_frame, text="查找和替换", padding="10")
+        input_frame.grid(row=2, column=0, sticky='ew', pady=(0, 10))
+
+        find_var = tk.StringVar()
+        replace_var = tk.StringVar()
+
+        ttk.Label(input_frame, text="查找内容:").grid(row=0, column=0, sticky='w', pady=(0, 5))
+        find_entry = ttk.Entry(input_frame, textvariable=find_var, width=50)
+        find_entry.grid(row=1, column=0, sticky='ew', pady=(0, 5))
+
+        ttk.Label(input_frame, text="替换为:").grid(row=2, column=0, sticky='w', pady=(0, 5))
+        replace_entry = ttk.Entry(input_frame, textvariable=replace_var, width=50)
+        replace_entry.grid(row=3, column=0, sticky='ew')
+
+        match_count_var = tk.StringVar(value="请输入查找内容后查看匹配数量")
+        ttk.Label(input_frame, textvariable=match_count_var, font=("TkDefaultFont", 9, "bold"), foreground="#CC6600").grid(row=4, column=0, sticky='w', pady=(8, 0))
+
+        input_frame.grid_columnconfigure(0, weight=1)
+
+        # 选项
+        options_frame = ttk.LabelFrame(main_frame, text="选项", padding="10")
+        options_frame.grid(row=3, column=0, sticky='ew', pady=(0, 5))
+
+        case_sensitive = tk.BooleanVar(value=True)
+        ttk.Checkbutton(options_frame, text="区分大小写", variable=case_sensitive).grid(row=0, column=0, sticky='w', pady=(0, 5))
+
+        preview_mode = tk.BooleanVar(value=True)
+        ttk.Checkbutton(options_frame, text="预览模式（推荐：先预览将要修改的项目，确认后再执行）", variable=preview_mode).grid(row=1, column=0, sticky='w')
+
+        # 按钮框架 - 固定在底部
+        button_frame = ttk.Frame(main_frame)
+        button_frame.grid(row=4, column=0, sticky='ew', pady=(12, 0))
+
+        def do_file_rename():
+            find_pattern = find_var.get()
+            replace_text = replace_var.get()
+            mode = match_mode.get()
+            case_sens = case_sensitive.get()
+            preview = preview_mode.get()
+
+            if not find_pattern:
+                self._show_warning_message("警告", "请输入查找内容！")
+                return
+
+            try:
+                self.execute_advanced_rename(find_pattern, replace_text, mode, case_sens, preview, "file", selected_paths, True)
+                if not preview:
+                    dialog.destroy()
+                    # 20260828 104445 执行完成后由任务结束回调按当前显示筛选刷新目录树以显示新文件名
+            except Exception as e:
+                self._show_error_message("错误", f"操作过程中出错:\n{str(e)}")
+
+        # 实时匹配数量统计（防抖）
+        self._file_rename_after_id = None
+
+        def count_matches():
+            find_text = find_var.get()
+            if not find_text:
+                match_count_var.set("请输入查找内容后查看匹配数量")
+                return
+            try:
+                matcher = self._make_matcher(find_text, replace_var.get(), match_mode.get(), case_sensitive.get(), True)
+            except Exception as e:
+                match_count_var.set(f"表达式错误：{e}")
+                return
+            count = 0
+            for path in selected_paths:
+                if os.path.isfile(path) and matcher(os.path.basename(path))[0]:
+                    count += 1
+            match_count_var.set(f"按当前条件匹配到 {count} 个文件")
+
+        def schedule_count_update(*args):
+            if self._file_rename_after_id is not None:
+                try:
+                    self.root.after_cancel(self._file_rename_after_id)
+                except Exception:
+                    pass
+            self._file_rename_after_id = self.root.after(150, count_matches)
+
+        def update_mode_description(*args):
+            mode_desc_var.set(mode_descriptions.get(match_mode.get(), ""))
+
+        find_var.trace_add("write", schedule_count_update)
+        replace_var.trace_add("write", schedule_count_update)
+        case_sensitive.trace_add("write", schedule_count_update)
+        match_mode.trace_add("write", lambda *a: (update_mode_description(), schedule_count_update()))
+        update_mode_description()
+        count_matches()
+
+        # 创建按钮并居中显示
+        button_container = ttk.Frame(button_frame)
+        button_container.grid(row=0, column=0)
+        button_frame.grid_columnconfigure(0, weight=1)  # 让按钮容器居中
+
+        ttk.Button(button_container, text="执行修改", command=do_file_rename).grid(row=0, column=0, padx=(0, 10))
+        ttk.Button(button_container, text="取消", command=dialog.destroy).grid(row=0, column=1)
+
+        # 动态计算并设置对话框尺寸
+        dialog.update_idletasks()
+        req_width = main_frame.winfo_reqwidth() + 30
+        req_height = main_frame.winfo_reqheight() + 50
+        dialog_width = max(600, req_width)
+        dialog_height = max(460, req_height)
+        screen_width = dialog.winfo_screenwidth()
+        screen_height = dialog.winfo_screenheight()
+        max_height = int(screen_height * 0.8)
+        dialog_height = min(dialog_height, max_height)
+        x = (screen_width - dialog_width) // 2
+        y = 50
+        if y + dialog_height > screen_height - 50:
+            y = max(50, screen_height - dialog_height - 50)
+        dialog.geometry(f"{dialog_width}x{dialog_height}+{x}+{y}")
+
+        find_entry.focus_set()
+
+    def execute_advanced_rename(self, find_pattern, replace_text, mode, case_sensitive, preview_mode, target_type, selected_paths=None, glob_replace=False):
         """执行高级重命名操作"""
-        import re
-        import fnmatch
+        # 20260828 104445 新增 selected_paths 参数：文件名称修改时仅处理已勾选的文件；为 None 时保持原有递归遍历全部项目的行为
+        # 20260828 104445 新增 glob_replace 参数：文件名称修改对话框的通配符模式使用直观替换语义
         
         renamed_items = []
         preview_items = []
-        
+        self._reset_runtime_warnings()
+        preview_virtual_names = {}
+        batch_operations = []  # 20260402 085047 将单次高级重命名记录为批次操作，便于一次撤销/重做
+
+        # 20260828 104445 匹配函数抽取为公共方法 _make_matcher，供对话框实时统计与执行共用
+        match_item = self._make_matcher(find_pattern, replace_text, mode, case_sensitive, glob_replace)
+        selected_files_mode = (target_type == "file" and selected_paths is not None)
         def process_directory(path):
+            # 20260828 111834 清理死代码：本函数仅在预览模式下调用，原非预览分支与冗余判断已移除
             try:
-                items = os.listdir(path)
+                items = sorted(os.listdir(path), key=lambda name: name.lower())
+                preview_virtual_names[path] = set(items)
                 for item in items:
                     full_path = os.path.join(path, item)
                     is_dir = os.path.isdir(full_path)
-                    
+
                     # 根据目标类型过滤
                     if target_type == "directory" and not is_dir:
                         continue
                     elif target_type == "file" and is_dir:
                         # 对于文件模式，仍需要递归处理目录
-                        if is_dir:
-                            process_directory(full_path)
+                        process_directory(full_path)
                         continue
-                    
-                    # 匹配检查
-                    match_found = False
-                    new_name = item
-                    
-                    if mode == "exact":
-                        if case_sensitive:
-                            match_found = find_pattern in item
-                            new_name = item.replace(find_pattern, replace_text)
-                        else:
-                            match_found = find_pattern.lower() in item.lower()
-                            # 大小写不敏感的替换
-                            import re
-                            new_name = re.sub(re.escape(find_pattern), replace_text, item, flags=re.IGNORECASE)
-                    
-                    elif mode == "wildcard":
-                        # 将通配符模式转换为正则表达式进行匹配和替换
-                        import re
-                        
-                        # 转换通配符为正则表达式
-                        regex_pattern = find_pattern.replace('*', '.*').replace('?', '.')
-                        
-                        try:
-                            flags = 0 if case_sensitive else re.IGNORECASE
-                            if re.search(regex_pattern, item, flags):
-                                match_found = True
-                                # 使用正则表达式进行替换
-                                new_name = re.sub(regex_pattern, replace_text, item, flags=flags)
-                        except re.error:
-                            # 如果正则表达式转换失败，回退到简单匹配
-                            if case_sensitive:
-                                match_found = fnmatch.fnmatch(item, find_pattern)
-                            else:
-                                match_found = fnmatch.fnmatch(item.lower(), find_pattern.lower())
-                            
-                            if match_found:
-                                new_name = item.replace(find_pattern, replace_text)
-                    
-                    elif mode == "regex":
-                        try:
-                            flags = 0 if case_sensitive else re.IGNORECASE
-                            if re.search(find_pattern, item, flags):
-                                match_found = True
-                                new_name = re.sub(find_pattern, replace_text, item, flags=flags)
-                        except re.error as e:
-                            raise Exception(f"正则表达式错误: {str(e)}")
-                    
+
+                    match_found, new_name = match_item(item)
+
                     if match_found and new_name != item:
-                        if preview_mode:
-                            preview_items.append({
-                                'path': full_path,
-                                'old_name': item,
-                                'new_name': new_name,
-                                'type': '目录' if is_dir else '文件'
-                            })
-                        else:
-                            # 检查新名称是否已存在
-                            new_path = os.path.join(path, new_name)
-                            if not os.path.exists(new_path):
-                                try:
-                                    os.rename(full_path, new_path)
-                                    
-                                    # 记录操作到历史
-                                    self.operation_history.add_operation('rename', {
-                                        'old_path': full_path,
-                                        'new_path': new_path,
-                                        'operation_type': f'advanced_rename_{target_type}'
-                                    })
-                                    
-                                    renamed_items.append(item)
-                                    full_path = new_path  # 更新路径用于递归
-                                except Exception as e:
-                                    print(f"重命名 {item} 失败: {str(e)}")
-                            else:
-                                print(f"跳过 {item}：目标名称 {new_name} 已存在")
-                    
+                        item_label = "目录" if is_dir else "文件"
+                        try:
+                            relative_path = os.path.relpath(full_path, self.source_dir.get())
+                        except Exception:
+                            relative_path = full_path
+                        virtual_names = preview_virtual_names.get(path, set())
+                        _, warning_message = self._prepare_rename_target(path, item, new_name, item_label)
+                        if warning_message is None and new_name in virtual_names and new_name != item:
+                            warning_message = f"{item_label} '{new_name}' 在本批次执行中会冲突，跳过重命名 '{item}'"
+                        if warning_message is None:
+                            if item in virtual_names:
+                                virtual_names.remove(item)
+                            virtual_names.add(new_name)
+                            preview_virtual_names[path] = virtual_names
+                        preview_items.append({
+                            'path': full_path,
+                            'relative_path': relative_path,
+                            'old_name': item,
+                            'new_name': new_name,
+                            'type': item_label,
+                            'status': warning_message or "可执行"
+                        })
+
                     # 递归处理子目录
                     if is_dir:
                         process_directory(full_path)
-                        
+                    self._process_pending_ui()
+
             except (PermissionError, OSError) as e:
-                print(f"无法访问目录 {path}: {str(e)}")
-        
-        # 开始处理
-        process_directory(self.source_dir.get())
+                self._add_runtime_warning(f"无法访问目录：{path}")
         
         if preview_mode:
+            if selected_files_mode:
+                # 20260828 104445 已选文件预览：仅遍历勾选的文件，不递归目录
+                for full_path in selected_paths:
+                    if not os.path.isfile(full_path):
+                        continue
+                    item = os.path.basename(full_path)
+                    match_found, new_name = match_item(item)
+                    if match_found and new_name != item:
+                        item_label = "文件"
+                        try:
+                            relative_path = os.path.relpath(full_path, self.source_dir.get())
+                        except Exception:
+                            relative_path = full_path
+                        parent_dir = os.path.dirname(full_path)
+                        virtual_names = preview_virtual_names.get(parent_dir, set())
+                        _, warning_message = self._prepare_rename_target(parent_dir, item, new_name, item_label)
+                        if warning_message is None and new_name in virtual_names and new_name != item:
+                            warning_message = f"{item_label} '{new_name}' 在本批次执行中会冲突，跳过重命名 '{item}'"
+                        if warning_message is None:
+                            if item in virtual_names:
+                                virtual_names.remove(item)
+                            virtual_names.add(new_name)
+                            preview_virtual_names[parent_dir] = virtual_names
+                        preview_items.append({
+                            'path': full_path,
+                            'relative_path': relative_path,
+                            'old_name': item,
+                            'new_name': new_name,
+                            'type': item_label,
+                            'status': warning_message or "可执行"
+                        })
+                    self._process_pending_ui()
+            else:
+                process_directory(self.source_dir.get())
             if preview_items:
                 self.show_preview_dialog(preview_items)
             else:
-                messagebox.showinfo("预览结果", "没有找到匹配的项目。")
-        else:
-            count = len(renamed_items)
-            type_name = "目录" if target_type == "directory" else "文件"
-            messagebox.showinfo("完成", f"重命名完成！共重命名 {count} 个{type_name}。")
-            if count > 0:
+                self._show_info_message("预览结果", "没有找到匹配的项目。")
+            return
+
+        if getattr(self, "task_running", False):
+            self._show_warning_message("提示", "当前有任务正在执行，请稍后再试。")
+            return  # 20260402 094929 避免并发任务导致状态混乱
+
+        counters = {"matched": 0, "renamed": 0, "skipped": 0, "failed": 0}  # 20260402 094929 执行模式计数器
+        self.task_runner = self.TaskRunner(self, description="高级重命名")  # 20260402 094929 分片执行（总量不预估）
+
+        def step_fn(dir_path, batch_ops):
+            if selected_files_mode:
+                # 20260828 104445 已选文件模式：dir_path 为单个文件路径，仅处理该文件，不递归
+                try:
+                    full_path = dir_path
+                    item = os.path.basename(full_path)
+                    if not os.path.isfile(full_path):
+                        return ("processed", [])
+                    match_found, new_name = match_item(item)
+                    if match_found and new_name != item:
+                        counters["matched"] += 1
+                        new_path, warning_message = self._prepare_rename_target(os.path.dirname(full_path), item, new_name, "文件")
+                        if warning_message:
+                            counters["skipped"] += 1
+                            self._add_runtime_warning(warning_message)
+                        elif new_path is None:
+                            counters["skipped"] += 1
+                        else:
+                            try:
+                                os.rename(full_path, new_path)
+                                batch_ops.append({
+                                    'type': 'rename',
+                                    'details': {
+                                        'old_path': full_path,
+                                        'new_path': new_path,
+                                        'operation_type': 'advanced_rename_file'
+                                    }
+                                })
+                                counters["renamed"] += 1
+                            except Exception:
+                                counters["failed"] += 1
+                                self._add_runtime_warning(f"重命名失败：{item}")
+                    self._process_pending_ui()
+                except (PermissionError, OSError):
+                    self._add_runtime_warning(f"无法访问文件：{dir_path}")
+                return ("processed", [])
+            new_dirs = []
+            try:
+                items = sorted(os.listdir(dir_path), key=lambda name: name.lower())
+            except (PermissionError, OSError):
+                self._add_runtime_warning(f"无法访问目录：{dir_path}")
+                return ("skipped", new_dirs)
+
+            for item in items:
+                full_path = os.path.join(dir_path, item)
+                is_dir = os.path.isdir(full_path)
+
+                if target_type == "directory" and not is_dir:
+                    continue
+
+                if target_type == "file" and is_dir:
+                    new_dirs.append(full_path)
+                    continue
+
+                match_found, new_name = match_item(item)
+                if match_found and new_name != item:
+                    counters["matched"] += 1
+                    item_label = "目录" if is_dir else "文件"
+                    new_path, warning_message = self._prepare_rename_target(dir_path, item, new_name, item_label)
+                    if warning_message:
+                        counters["skipped"] += 1
+                        self._add_runtime_warning(warning_message)
+                    elif new_path is None:
+                        counters["skipped"] += 1
+                    else:
+                        try:
+                            os.rename(full_path, new_path)
+                            batch_ops.append({
+                                'type': 'rename',
+                                'details': {
+                                    'old_path': full_path,
+                                    'new_path': new_path,
+                                    'operation_type': f'advanced_rename_{target_type}'
+                                }
+                            })
+                            counters["renamed"] += 1
+                            full_path = new_path
+                        except Exception:
+                            counters["failed"] += 1
+                            self._add_runtime_warning(f"重命名失败：{item}")
+
+                if is_dir:
+                    new_dirs.append(full_path)
+
+                self._process_pending_ui()
+
+            return ("processed", new_dirs)
+
+        def on_done(summary):
+            if summary.get("batch_operations"):
+                # 20260828 104445 已选文件模式的操作记录名称调整为“文件名称修改”
+                if target_type == "directory":
+                    description = "全部目录名修改"
+                elif selected_files_mode:
+                    description = "文件名称修改"
+                else:
+                    description = "全部文件名修改"
+                if summary.get("cancelled"):
+                    description += "（已取消）"
+                self.operation_history.add_operation('batch', {
+                    'description': description,
+                    'operation_type': f'advanced_rename_{target_type}',
+                    'operations': summary["batch_operations"]
+                })
                 self.update_history_buttons()
+
+            type_name = "目录" if target_type == "directory" else "文件"
+            message_prefix = "已取消！" if summary.get("cancelled") else "重命名完成！"
+            self._finalize_tree_change(
+                "完成",
+                f"{message_prefix}匹配 {counters['matched']} 个{type_name}，成功 {counters['renamed']} 个，跳过 {counters['skipped']} 个，失败 {counters['failed']} 个。",  # 20260402 094929 执行结果汇总
+                # 20260828 104445 已选文件模式按用户当前显示筛选刷新，不强制切换视图
+                refresh_mode=(self.tree_display_mode.get() if selected_files_mode else ("directories_only" if target_type == "directory" else "files_only")),  # 20260402 094929 执行结束后刷新视图
+                warning_title="重命名提示",
+                update_history=counters["renamed"] > 0
+            )
+
+        # 20260828 104445 已选文件模式以勾选文件列表作为任务队列；否则以源目录为起点递归遍历
+        initial_queue = list(selected_paths) if selected_files_mode else [self.source_dir.get()]
+        self.task_runner.start(initial_queue, step_fn, on_done)  # 20260402 094929 启动高级重命名分片任务
     
     def show_preview_dialog(self, preview_items):
         """显示预览对话框"""
@@ -2395,22 +3641,50 @@ V1.1 功能：
         main_frame.pack(fill=tk.BOTH, expand=True)
         
         # 标题
-        title_label = ttk.Label(main_frame, text=f"将要重命名的项目 (共 {len(preview_items)} 个)", 
+        executable_count = sum(1 for item in preview_items if item.get('status') == "可执行")
+        skipped_count = len(preview_items) - executable_count
+        title_base_text = f"预览重命名结果 (共 {len(preview_items)} 个，可执行 {executable_count} 个，需跳过 {skipped_count} 个)"
+        title_var = tk.StringVar()
+        title_label = ttk.Label(main_frame, textvariable=title_var, 
                                font=("TkDefaultFont", 11, "bold"))
         title_label.pack(pady=(0, 10))
+
+        show_only_skipped = tk.BooleanVar(value=self.preview_filter_mode == "skipped")
+        show_only_executable = tk.BooleanVar(value=self.preview_filter_mode == "executable")
+        filter_frame = ttk.Frame(main_frame)
+        filter_frame.pack(fill=tk.X, pady=(0, 6))
+        ttk.Checkbutton(
+            filter_frame,
+            text="仅看可执行项",
+            variable=show_only_executable,
+            command=lambda: on_filter_change("executable")
+        ).pack(side=tk.LEFT)
+        ttk.Checkbutton(
+            filter_frame,
+            text="仅看需跳过项",
+            variable=show_only_skipped,
+            command=lambda: on_filter_change("skipped")
+        ).pack(side=tk.LEFT, padx=(8, 0))
+        ttk.Button(filter_frame, text="重置筛选", command=lambda: reset_filters()).pack(side=tk.LEFT, padx=(12, 0))
+        preview_summary_var = tk.StringVar()
+        ttk.Label(filter_frame, textvariable=preview_summary_var, foreground="#666666").pack(side=tk.RIGHT)
         
         # 创建树形视图显示预览结果
         tree_frame = ttk.Frame(main_frame)
         tree_frame.pack(fill=tk.BOTH, expand=True)
         
-        preview_tree = ttk.Treeview(tree_frame, columns=("type", "old_name", "new_name"), show="headings")
+        preview_tree = ttk.Treeview(tree_frame, columns=("type", "old_name", "new_name", "status", "relative_path"), show="headings")
         preview_tree.heading("type", text="类型")
         preview_tree.heading("old_name", text="原名称")
         preview_tree.heading("new_name", text="新名称")
+        preview_tree.heading("status", text="执行结果")
+        preview_tree.heading("relative_path", text="路径")
         
         preview_tree.column("type", width=80)
-        preview_tree.column("old_name", width=250)
-        preview_tree.column("new_name", width=250)
+        preview_tree.column("old_name", width=150)
+        preview_tree.column("new_name", width=150)
+        preview_tree.column("status", width=200)
+        preview_tree.column("relative_path", width=320)
         
         # 添加滚动条
         v_scrollbar = ttk.Scrollbar(tree_frame, orient="vertical", command=preview_tree.yview)
@@ -2418,16 +3692,158 @@ V1.1 功能：
         
         preview_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         v_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        preview_tree.tag_configure("skipped", foreground="#AA0000")
         
         # 填充数据
-        for item in preview_items:
-            preview_tree.insert("", "end", values=(item['type'], item['old_name'], item['new_name']))
-        
+        sorted_preview_items = sorted(
+            preview_items,
+            key=lambda item: (
+                0 if item.get('status', '可执行') == "可执行" else 1,
+                str(item.get('relative_path', item.get('path', ''))).lower(),
+                str(item.get('old_name', '')).lower()
+            )
+        )
+        visible_items_state = {"items": []}
+        button_refs = {"copy": None, "reason": None, "export": None}
+
+        def on_filter_change(active_filter):
+            if active_filter == "skipped" and show_only_skipped.get():
+                show_only_executable.set(False)
+                self.preview_filter_mode = "skipped"
+            elif active_filter == "executable" and show_only_executable.get():
+                show_only_skipped.set(False)
+                self.preview_filter_mode = "executable"
+            elif show_only_executable.get():
+                self.preview_filter_mode = "executable"
+            elif show_only_skipped.get():
+                self.preview_filter_mode = "skipped"
+            else:
+                self.preview_filter_mode = "all"
+            render_preview_rows()
+
+        def reset_filters():
+            show_only_executable.set(False)
+            show_only_skipped.set(False)
+            self.preview_filter_mode = "all"
+            render_preview_rows()
+
+        def render_preview_rows():
+            for row_id in preview_tree.get_children():
+                preview_tree.delete(row_id)
+
+            if show_only_skipped.get():
+                visible_items = [item for item in sorted_preview_items if item.get('status', '可执行') != "可执行"]
+            elif show_only_executable.get():
+                visible_items = [item for item in sorted_preview_items if item.get('status', '可执行') == "可执行"]
+            else:
+                visible_items = sorted_preview_items
+            visible_items_state["items"] = visible_items
+
+            visible_executable = sum(1 for item in visible_items if item.get('status', '可执行') == "可执行")
+            visible_skipped = len(visible_items) - visible_executable
+            title_var.set(f"{title_base_text}    筛选：{get_filter_scope_text()}")
+            preview_summary_var.set(f"当前显示：{len(visible_items)} 项（可执行 {visible_executable}，需跳过 {visible_skipped}）")
+            if button_refs["copy"] is not None:
+                button_refs["copy"].configure(state=("normal" if visible_items else "disabled"))
+            if button_refs["export"] is not None:
+                button_refs["export"].configure(state=("normal" if visible_items else "disabled"))
+            if button_refs["reason"] is not None:
+                button_refs["reason"].configure(state=("normal" if visible_skipped else "disabled"))
+
+            for item in visible_items:
+                status_text = item.get('status', '可执行')
+                row_id = preview_tree.insert(
+                    "",
+                    "end",
+                    values=(item['type'], item['old_name'], item['new_name'], status_text, item.get('relative_path', item.get('path', '')))
+                )
+                if status_text != "可执行":
+                    preview_tree.item(row_id, tags=("skipped",))
+
+        def get_filter_scope_text():
+            if show_only_skipped.get():
+                return "仅看需跳过项"
+            if show_only_executable.get():
+                return "仅看可执行项"
+            return "全部项"
+
+        def copy_visible_items():
+            visible_items = visible_items_state["items"]
+            if not visible_items:
+                self._show_warning_message("提示", f"当前筛选（{get_filter_scope_text()}）下没有可复制的预览项。")
+                return
+
+            text = build_visible_items_text(visible_items)
+            preview_dialog.clipboard_clear()
+            preview_dialog.clipboard_append(text)
+            preview_dialog.update()
+            self._show_info_message("完成", f"已复制当前筛选（{get_filter_scope_text()}）下的 {len(visible_items)} 条预览项到剪贴板。")
+
+        def copy_skip_reasons():
+            visible_items = visible_items_state["items"]
+            skipped_items = [item for item in visible_items if item.get('status', '可执行') != "可执行"]
+            if not skipped_items:
+                self._show_warning_message("提示", f"当前筛选（{get_filter_scope_text()}）下没有需跳过的预览项。")
+                return
+
+            reason_counter = {}
+            for item in skipped_items:
+                reason = item.get('status', '未知原因')
+                reason_counter[reason] = reason_counter.get(reason, 0) + 1
+
+            lines = ["失败原因汇总\t数量"]
+            for reason, count in sorted(reason_counter.items(), key=lambda pair: pair[1], reverse=True):
+                lines.append(f"{reason}\t{count}")
+
+            text = "\n".join(lines)
+            preview_dialog.clipboard_clear()
+            preview_dialog.clipboard_append(text)
+            preview_dialog.update()
+            self._show_info_message("完成", f"已复制当前筛选（{get_filter_scope_text()}）下的 {len(reason_counter)} 条失败原因汇总到剪贴板。")
+
+        def build_visible_items_text(visible_items):
+            lines = ["类型\t原名称\t新名称\t执行结果\t路径"]
+            for item in visible_items:
+                lines.append(
+                    f"{item.get('type', '')}\t{item.get('old_name', '')}\t{item.get('new_name', '')}\t{item.get('status', '可执行')}\t{item.get('relative_path', item.get('path', ''))}"
+                )
+            return "\n".join(lines)
+
+        def export_visible_items():
+            visible_items = visible_items_state["items"]
+            if not visible_items:
+                self._show_warning_message("提示", f"当前筛选（{get_filter_scope_text()}）下没有可导出的预览项。")
+                return
+
+            default_name = f"重命名预览_{self.get_current_time().replace(':', '').replace(' ', '_')}.txt"
+            save_path = filedialog.asksaveasfilename(
+                title="导出预览列表",
+                defaultextension=".txt",
+                initialfile=default_name,
+                filetypes=[("文本文件", "*.txt"), ("所有文件", "*.*")]
+            )
+            if not save_path:
+                return
+
+            try:
+                with open(save_path, "w", encoding="utf-8") as f:
+                    f.write(build_visible_items_text(visible_items))
+                self._show_info_message("完成", f"已导出当前筛选（{get_filter_scope_text()}）下的 {len(visible_items)} 条预览项到:\n{save_path}")
+            except Exception as e:
+                self._show_error_message("错误", f"导出预览列表失败:\n{str(e)}")
+
         # 按钮
         button_frame = ttk.Frame(main_frame)
         button_frame.pack(fill=tk.X, pady=(10, 0))
         
+        button_refs["copy"] = ttk.Button(button_frame, text="复制当前列表", command=copy_visible_items)
+        button_refs["copy"].pack(side=tk.LEFT)
+        button_refs["reason"] = ttk.Button(button_frame, text="复制失败原因", command=copy_skip_reasons)
+        button_refs["reason"].pack(side=tk.LEFT, padx=(8, 0))
+        button_refs["export"] = ttk.Button(button_frame, text="导出当前列表", command=export_visible_items)
+        button_refs["export"].pack(side=tk.LEFT, padx=(8, 0))
         ttk.Button(button_frame, text="关闭", command=preview_dialog.destroy).pack(side=tk.RIGHT)
+        render_preview_rows()
 
 def main():
     root = tk.Tk()
