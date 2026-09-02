@@ -191,3 +191,12 @@
 ---
 
 ⭐ 如果这个项目对您有帮助，请给个Star支持一下！
+
+## 爱心打赏
+
+☕ 如果你开心，欢迎送爱心请作者喝杯咖啡，让我更有动力去创造！
+<p align="center">
+  <img src="https://github.com/yihufree/XueYuTTS/blob/main/images/wechatpay_203903.png" alt="爱心 微信赞赏码" width="240">
+</p>
+
+---
