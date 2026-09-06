@@ -16,6 +16,10 @@ try:
     from tkinter import messagebox
 except ImportError:
     messagebox = None
+try:
+    from tkinter import simpledialog  # 20260906 201500 新增：撤销复制删除目录时输入确认文字用
+except ImportError:
+    simpledialog = None
 
 class OperationHistory:
     """操作历史管理类"""
@@ -269,6 +273,16 @@ class OperationHistory:
                             f"确定要删除吗？",
                             icon='warning'
                         )
+                        # 20260906 201500 新增：目录删除二次确认——需手动输入“确认删除”方可执行，防止误操作
+                        if result and simpledialog:
+                            typed = simpledialog.askstring(
+                                "二次确认",
+                                f"即将永久删除目录：{item_name}\n"
+                                f"目录及其中的全部内容（包括复制完成后新增的内容）将无法恢复！\n\n"
+                                f"如确认删除，请在下方输入：确认删除"
+                            )
+                            if typed != "确认删除":
+                                return False  # 输入不匹配或取消输入时中止撤销
                     else:
                         result = messagebox.askyesno(
                             "确认删除",

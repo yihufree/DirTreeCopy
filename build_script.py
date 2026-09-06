@@ -2,8 +2,8 @@ import sys
 import os
 import PyInstaller.__main__
 
-APP_VERSION = "V1.4"  # 20260828 110640 版本升级至 V1.4
-BUILD_DATE = "20260828"  # 20260828 110640 构建日期更新为 20260828
+APP_VERSION = "V1.5"  # 20260906 192644 版本升级至 V1.5
+BUILD_DATE = "20260906"  # 20260906 192644 构建日期更新为 20260906
 BUILD_NAME = f"DirCopyTool_{BUILD_DATE}_{APP_VERSION}"
 
 def check_dependencies():

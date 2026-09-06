@@ -4,8 +4,6 @@
 # Build dependencies (optional, only needed for building executable)
 pyinstaller>=5.0.0
 
-# Development dependencies (optional)
-# Add any additional dependencies here if needed in the future
-
-# DOCX export functionality
+# Export functionality
 python-docx>=0.8.11
+XlsxWriter>=3.0.0
