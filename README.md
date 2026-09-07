@@ -188,11 +188,14 @@
 - 感谢 Python 社区提供的优秀工具和库
 - 感谢所有测试用户的反馈和建议
 
-## 📞 联系方式
+---
 
-如有问题或建议，请通过以下方式联系：
+## 爱心打赏
 
-- 提交 [Issue](../../issues)
+☕ 如果你开心，欢迎送爱心请作者喝杯咖啡，让我更有动力去创造！
+<p align="center">
+  <img src="https://github.com/yihufree/XueYuTTS/blob/main/images/wechatpay_203903.png" alt="爱心 微信赞赏码" width="240">
+</p>
 
 ---
 
