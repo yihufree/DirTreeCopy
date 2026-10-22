@@ -1,9 +1,30 @@
 import sys
 import os
+import re
 import PyInstaller.__main__
 
-APP_VERSION = "V1.5"  # 20260906 192644 版本升级至 V1.5
-BUILD_DATE = "20260906"  # 20260906 192644 构建日期更新为 20260906
+# 20261022 151500 修改：自动从 main_app.py 读取版本号和构建日期，不再人工维护
+def load_version_info():
+    """从 main_app.py 自动解析 APP_VERSION 和 APP_BUILD_DATE"""
+    main_app_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'main_app.py')
+    if not os.path.exists(main_app_path):
+        print(f"❌ 错误：找不到 main_app.py 文件（用于读取版本信息）")
+        sys.exit(1)
+    try:
+        with open(main_app_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+        # 解析 APP_VERSION，匹配形如 APP_VERSION = "V1.6"
+        version_match = re.search(r'APP_VERSION\s*=\s*["\']([^"\']+)["\']', content)
+        build_match = re.search(r'APP_BUILD_DATE\s*=\s*["\']([^"\']+)["\']', content)
+        if not version_match or not build_match:
+            print("❌ 错误：无法从 main_app.py 解析版本号或构建日期")
+            sys.exit(1)
+        return version_match.group(1), build_match.group(1)
+    except Exception as e:
+        print(f"❌ 错误：读取 main_app.py 版本信息失败：{e}")
+        sys.exit(1)
+
+APP_VERSION, BUILD_DATE = load_version_info()  # 20261022 151500 修改：自动读取，不再硬编码
 BUILD_NAME = f"DirCopyTool_{BUILD_DATE}_{APP_VERSION}"
 
 def check_dependencies():
