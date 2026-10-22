@@ -10,6 +10,25 @@
 ### 新增
 - 待定功能开发
 
+## [1.6.0] - 2026-10-22
+
+### 新增
+- 🆕 **按位置/定界符改名**：支持第 x 个字符前/后的删除、替换、添加，定界符前/后的删除、替换、添加，前/后 X 个字符的删除、替换
+- 🆕 **重名时自动加序号**：扩展到全部改名功能（名称修改、字符替换、多维重命名等），支持前置/后置、序号类型（1/A/a/Ⅰ）、连接符、起始序号、补零位数、每目录重新编号
+- 🆕 **显示文件大小独立开关**：与"显示目录大小"独立控制，默认关闭，大目录下提升显示速度
+- 🆕 **搜索功能**：按名称模糊搜索目录树，异步后台执行，不阻塞界面
+- 🆕 **功能筛选标签**："复制目录结构和导出文件名功能"区第一行左侧新增"功能筛选："标签，与"显示筛选："对齐
+
+### 更改
+- 🔄 **按钮改名**："多维重命名本级目录名"→"本级目录名称增序"，"多维重命名本级文件名"→"本级文件名称增序"
+- 🔄 **版本信息更新**：主程序、构建脚本统一升级至 V1.6 / 20261022
+- 🔄 **界面优化**：主界面名称列宽 270→500、大小列宽 80→100；预览窗口 900x550→1300x670；实时示例由 Text 改为 Treeview 表格化
+- 🔄 **撤销/重做**：全部改名功能（含按位置/定界符改名）均支持撤销/重做
+
+### 修复
+- 🐛 **预览窗口高度不足**：Treeview 添加 height=15，内容区域充分利用窗口空间
+- 🐛 **预览窗口宽度不足**：Treeview 各列宽大幅增加，窗口宽度同步扩至 1300
+
 ## [1.5.0] - 2026-09-06
 
 ### 新增
@@ -107,13 +126,14 @@
 
 ## 版本链接
 
-- [未发布]: https://github.com/username/DirTreeCopy/compare/v1.5.0...HEAD
-- [1.5.0]: https://github.com/username/DirTreeCopy/compare/v1.4.0...v1.5.0
-- [1.4.0]: https://github.com/username/DirTreeCopy/compare/v1.3.0...v1.4.0
-- [1.3.0]: https://github.com/username/DirTreeCopy/compare/v1.2.0...v1.3.0
-- [1.2.0]: https://github.com/username/DirTreeCopy/compare/v1.1.0...v1.2.0
-- [1.1.0]: https://github.com/username/DirTreeCopy/compare/v1.0.0...v1.1.0
-- [1.0.0]: https://github.com/username/DirTreeCopy/releases/tag/v1.0.0
+- [未发布]: https://github.com/yihufree/DirTreeCopy/compare/v1.6.0...HEAD
+- [1.6.0]: https://github.com/yihufree/DirTreeCopy/compare/v1.5.0...v1.6.0
+- [1.5.0]: https://github.com/yihufree/DirTreeCopy/compare/v1.4.0...v1.5.0
+- [1.4.0]: https://github.com/yihufree/DirTreeCopy/compare/v1.3.0...v1.4.0
+- [1.3.0]: https://github.com/yihufree/DirTreeCopy/compare/v1.2.0...v1.3.0
+- [1.2.0]: https://github.com/yihufree/DirTreeCopy/compare/v1.1.0...v1.2.0
+- [1.1.0]: https://github.com/yihufree/DirTreeCopy/compare/v1.0.0...v1.1.0
+- [1.0.0]: https://github.com/yihufree/DirTreeCopy/releases/tag/v1.0.0
 
 ## 版本说明
 

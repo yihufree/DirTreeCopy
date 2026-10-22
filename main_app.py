@@ -6,12 +6,19 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk, font
 import shutil
 from operation_history import OperationHistory
+from position_rename import (  # 20261022 112500 新增：按位置/定界符改名的纯逻辑模块（无界面依赖，便于单元测试）
+    ACTION_DELETE, ACTION_INSERT, ACTION_REPLACE,
+    COUNT_MODE_CHAR, COUNT_MODE_UNIT,
+    POSITION_PREFIX, POSITION_SUFFIX,
+    RULE_DELIM_AFTER, RULE_DELIM_BEFORE, RULE_HEAD, RULE_POS_AFTER, RULE_POS_BEFORE, RULE_TAIL,
+    apply_rule, plan_batch_sequence,
+)
 
 APP_NAME = "目录和文件复制及重命名工具"
-APP_VERSION = "V1.5"  # 20260906 192644 版本升级至 V1.5（新增关于按钮、多维重命名勾选式、全层级目录名称修改）
-APP_BUILD_DATE = "20260906"  # 20260906 192644 构建日期更新为 20260906
-APP_RELEASE_DATE = "2026/09/06"  # 20260906 192644 更新日期更新为 2026/09/06
-APP_DEVELOP_DATE = "2026/09/06"  # 20260906 192644 开发日期更新为 2026/09/06
+APP_VERSION = "V1.6"  # 20261022 124500 修改：版本升级至 V1.6（新增按位置/定界符改名功能、重名时自动加序号扩展至各改名功能）
+APP_BUILD_DATE = "20261022"  # 20261022 124500 修改：构建日期更新为 20261022
+APP_RELEASE_DATE = "2026/10/22"  # 20261022 124500 修改：更新日期更新为 2026/10/22
+APP_DEVELOP_DATE = "2026/10/22"  # 20261022 124500 修改：开发日期更新为 2026/10/22
 APP_AUTHOR = "飞歌"
 APP_EXECUTABLE_NAME = f"DirCopyTool_{APP_BUILD_DATE}_{APP_VERSION}"
 APP_WINDOW_TITLE = f"{APP_NAME}   {APP_BUILD_DATE}  {APP_AUTHOR}"
@@ -32,8 +39,8 @@ class DirCopyApp:
         screen_height = root.winfo_screenheight()
         
         # 动态计算窗口大小
-        base_window_width = max(800, min(1200, int(screen_width * 0.60)))  # 20260402 120300 以屏幕宽度的60%作为基础宽度
-        window_width = max(720, base_window_width - 150)  # 20260402 120000 默认宽度再减小150（不小于最小宽度）
+        # 20261022 110800 修改：重命名按钮行实测需 1249px，窗口默认宽度固定为 1280，确保行末“按位置/定界符改名”按钮完整可见
+        window_width = 1280
         window_height = 650
         
         # 计算窗口位置（水平居中，垂直距离上边50像素）
@@ -49,7 +56,7 @@ class DirCopyApp:
         self.root.geometry(f"{window_width}x{window_height}+{x}+{y}")
         
         # 设置窗口最小尺寸
-        self.root.minsize(720, 500)  # 20260402 112200 允许窗口更紧凑但保留可用空间
+        self.root.minsize(1280, 500)  # 20261022 110800 修改：最小宽度与默认宽度一致，避免重命名按钮行被裁切
         
         # 设置默认字体大小（缩小为原来的80%）
         default_font = font.nametofont("TkDefaultFont")
@@ -77,9 +84,10 @@ class DirCopyApp:
         self.tree_display_mode = tk.StringVar(value="normal")
         self.export_format = tk.StringVar(value="txt")
         self.show_directory_sizes = tk.BooleanVar(value=False)  # 20260402 085901 增加目录大小显示开关（默认关闭以提升大目录性能）
+        self.show_file_sizes = tk.BooleanVar(value=False)  # 20261022 125500 新增：文件大小显示开关（默认关闭，目录层次和文件较多时提升显示与处理速度）
         self.directory_size_cache = {}
         self.runtime_warnings = []
-        self.ui_update_interval = 50
+        self.ui_update_interval = 100  # 20261022 140500 修改：由 50 增至 100，减少 UI 刷新次数，提升大目录加载速度
         self.ui_update_counter = 0
         self.preview_filter_mode = "all"
         self.tree_item_paths = {}  # 20260402 085901 目录树节点路径映射，用于懒加载与可靠路径解析
@@ -124,8 +132,12 @@ class DirCopyApp:
         ttk.Label(dialog, text="替换为:", font=dialog_font).pack(pady=5)
         replace_var = tk.StringVar()
         ttk.Entry(dialog, textvariable=replace_var, font=dialog_font).pack(pady=5)
-        
-        return dialog, find_var, replace_var
+
+        # 20261022 123000 新增：重名时自动加序号常驻选项组（本级/全部目录字符替换共用）
+        seq_frame, seq_collect = self._build_sequence_options_widget(dialog)
+        seq_frame.pack(fill=tk.X, padx=10, pady=(5, 0))
+
+        return dialog, find_var, replace_var, seq_collect  # 20261022 123000 修改：返回值追加序号参数收集函数
     
     def _setup_backup_directory(self):
         """设置备份目录"""
@@ -524,10 +536,12 @@ class DirCopyApp:
    • 复制选定目录和文件：灵活选择要复制的文件和目录，支持混合选择
    • 导出目录和文件的名称：将目录结构导出为10种文档格式
 
-3. 【显示筛选】（3种模式）
+3. 【显示筛选】（3种模式 + 2个独立开关）
    • 默认显示：同时显示目录和文件
    • 只显示目录：仅在列表中显示目录，便于查看目录层次
    • 只显示文件：仅在列表中显示文件，便于查看文件清单
+   • 显示目录大小：独立复选框，默认关闭，大目录下可提升显示速度
+   • 显示文件大小：独立复选框，默认关闭，与目录大小开关互不干扰（V1.6 新增）
 
 4. 【多格式导出功能】（10种格式）
    • 导出目录文件名称：生成目录结构文档，支持10种不同格式
@@ -566,6 +580,17 @@ class DirCopyApp:
      - 预览功能：重命名前可预览结果
      - 条件替换：复杂的重命名规则
      - 安全检查：防止重名冲突
+   
+   • 按位置/定界符改名（V1.6 新增）：
+     - 第 x 个字符前/后 y 个字符的删除、替换为、添加
+     - 定界符前/后所有字符的删除、替换为、添加（可指定第 N 次出现，默认首次）
+     - 前/后 X 个字符的删除、替换为
+     - 计数方式可选：汉字计 2、其余计 1（默认），或每个字符均计 1
+     - 可勾选保护扩展名（默认开启）
+   
+   • 重名时自动加序号（V1.6 新增，覆盖全部改名功能）：
+     - 全部改名功能（按位置/定界符改名、全层级目录名称修改、各层级文件名称修改、本级目录/文件名称增序、本级/全部目录字符替换）均支持
+     - 可选前置/后置、序号类型（1/A/a/Ⅰ）、连接符、起始序号、补零位数、每目录重新编号
 
 6. 【操作历史管理】
    • 智能历史记录：自动记录所有重命名和复制操作
@@ -576,7 +601,12 @@ class DirCopyApp:
    • 历史记录：当前版本主要记录复制和重命名操作的历史信息
    • 状态管理：实时显示可撤销/重做状态
 
-7. 【选择操作】
+7. 【搜索功能】（V1.6 新增）
+   • 按名称模糊搜索目录树中的文件和目录
+   • 异步后台搜索，不阻塞界面操作
+   • 搜索结果以列表展示，可快速定位到目标项目
+
+8. 【选择操作】
    • 全选：选择当前目录下的所有项目
    • 取消全选：取消所有选择
    • 单项选择：通过复选框选择特定项目
@@ -680,7 +710,23 @@ class DirCopyApp:
 更新日期：{APP_RELEASE_DATE}
 作者：{APP_AUTHOR}
 
+【本次更新（V1.6）】
+1. 新增"按位置/定界符改名"功能：支持第 x 个字符前/后的删除、替换、添加，定界符前/后的删除、替换、添加，前/后 X 个字符的删除、替换
+2. 计数方式可选：汉字计 2、其余计 1（默认），或每个字符均计 1；可保护扩展名
+3. "重名时自动加序号"扩展到全部改名功能（名称修改、字符替换、多维重命名等），支持前置/后置、序号类型、连接符、起始序号、补零与每目录重新编号
+4. 以上全部操作均支持撤销/重做
+5. 新增"显示文件大小"复选框（默认关闭），与"显示目录大小"独立控制，大目录下可提升显示与处理速度
+6. "复制目录结构和导出文件名功能"区第一行左侧新增"功能筛选："标签，与"显示筛选："对齐
+7. 搜索功能改为异步后台执行，不再阻塞界面
+8. 预览重命名结果窗口宽度 1300、高度 670，列表列宽大幅增加，内容显示更全
+9. 主界面列表框名称列宽 500、大小列宽 100，消除右侧空白
+
 【当前版本主要能力】
+• 按位置/定界符改名：第 x 个字符前/后的删除、替换、添加；定界符前/后的删除、替换、添加；前/后 X 个字符的删除、替换（可指定第 N 次定界符，默认首次）
+• 重名时自动加序号：全部改名功能（按位置/定界符改名、全层级目录名称修改、各层级文件名称修改、本级目录/文件名称增序、本级/全部目录字符替换）均支持，可选前置/后置、序号类型（1/A/a/Ⅰ）、连接符、起始序号、补零位数、每目录重新编号
+• 计数方式可选：汉字计 2、其余计 1（默认），或每个字符均计 1；可保护扩展名
+• 显示筛选增强：默认显示/只显示目录/只显示文件，可独立开关"显示目录大小"与"显示文件大小"
+• 搜索功能：按名称模糊搜索目录树，异步后台执行，不阻塞界面
 • 全层级目录名称修改功能：可先勾选部分或全部目录（各层级），再执行精确匹配、通配符（直观替换）、正则表达式改名
 • 各层级文件名称修改功能：可先勾选部分或全部文件（各层级），再执行精确匹配、通配符（直观替换）、正则表达式改名
 • 多维重命名本级目录名/文件名：仅对已勾选的本级目录/文件执行前缀、后缀、序号编号改名
@@ -724,9 +770,10 @@ V1.1 功能：
 
     def show_about_info(self):
         """显示关于对话框（20260906 192644 新增）"""
+        # 20261022 133000 修改：新增程序路径后内容增高，窗口高度由 360 调整为 400，避免底部“确定”按钮被遮住
         about_dialog = tk.Toplevel(self.root)
         about_dialog.title("关于")
-        about_dialog.geometry("460x360")
+        about_dialog.geometry("460x400")
         about_dialog.resizable(False, False)
 
         # 设置对话框位置：水平居中，垂直居中
@@ -734,7 +781,7 @@ V1.1 功能：
         screen_width = about_dialog.winfo_screenwidth()
         screen_height = about_dialog.winfo_screenheight()
         dialog_width = 460
-        dialog_height = 360
+        dialog_height = 400
         x = (screen_width - dialog_width) // 2
         y = (screen_height - dialog_height) // 2
         about_dialog.geometry(f"{dialog_width}x{dialog_height}+{x}+{y}")
@@ -765,18 +812,31 @@ V1.1 功能：
         for line in info_lines:
             ttk.Label(info_frame, text=line, font=("TkDefaultFont", 10)).pack(anchor='w', pady=2)
 
+        # 程序路径（20261022 133000 修改：移到“可执行文件”下方，即信息区底部）
+        try:
+            app_path = os.path.dirname(os.path.abspath(sys.executable if getattr(sys, 'frozen', False) else __file__))
+        except Exception:
+            app_path = ""
+        ttk.Label(info_frame, text=f"程序路径：{app_path}",
+                  font=("TkDefaultFont", 8), foreground="#888888").pack(anchor='w', pady=(2, 0))
+
         # 协议与简介
         ttk.Separator(main_frame, orient='horizontal').pack(fill=tk.X, pady=(12, 8))
         ttk.Label(main_frame, text="开源协议：MIT License",
                   font=("TkDefaultFont", 9), foreground="#666666").pack(anchor='w')
         ttk.Label(main_frame, text="运行平台：Windows 7/8/10/11",
                   font=("TkDefaultFont", 9), foreground="#666666").pack(anchor='w')
-        try:
-            app_path = os.path.dirname(os.path.abspath(sys.executable if getattr(sys, 'frozen', False) else __file__))
-        except Exception:
-            app_path = ""
-        ttk.Label(main_frame, text=f"程序路径：{app_path}",
-                  font=("TkDefaultFont", 8), foreground="#888888").pack(anchor='w', pady=(6, 0))
+
+        # 20261022 124500 新增：项目地址可点击链接（放在运行平台下方）
+        import webbrowser
+        project_url = "https://github.com/yihufree/DirTreeCopy"
+        url_frame = ttk.Frame(main_frame)
+        url_frame.pack(anchor='w', pady=(6, 0))
+        ttk.Label(url_frame, text="项目地址：", font=("TkDefaultFont", 9), foreground="#666666").pack(side=tk.LEFT)
+        url_label = tk.Label(url_frame, text=project_url, font=("TkDefaultFont", 9, "underline"),
+                             foreground="#2B6CB0", cursor="hand2")
+        url_label.pack(side=tk.LEFT)
+        url_label.bind("<Button-1>", lambda event: webbrowser.open(project_url))
 
         # 关闭按钮
         ttk.Button(main_frame, text="确定", command=about_dialog.destroy).pack(pady=(15, 0))
@@ -850,23 +910,25 @@ V1.1 功能：
         style.configure('Blue.TLabelframe.Label', foreground=primary_color, font=('TkDefaultFont', 10, 'bold'))  # 20260402 101800 统一界面主色与字号
         mode_frame.configure(style='Blue.TLabelframe')
         
+        # 20261022 133000 修改：功能筛选/显示筛选冒号统一为全角“：”，与中文标签风格一致
+        ttk.Label(mode_frame, text="功能筛选：").grid(row=0, column=0, sticky='w', padx=(5, 2))
         self.mode_radio_buttons = []  # 20260402 100551 记录模式单选按钮，任务执行期间可禁用
         rb = ttk.Radiobutton(mode_frame, text="仅复制一层目录", value="single_level", variable=self.copy_mode, command=self.on_mode_change)
-        rb.grid(row=0, column=0, padx=(5,2))
-        self.mode_radio_buttons.append(rb)
-        rb = ttk.Radiobutton(mode_frame, text="复制选定层级目录", value="selected_levels", variable=self.copy_mode, command=self.on_mode_change)
         rb.grid(row=0, column=1, padx=2)
         self.mode_radio_buttons.append(rb)
-        rb = ttk.Radiobutton(mode_frame, text="复制所有层级目录", value="all_levels", variable=self.copy_mode, command=self.on_mode_change)
+        rb = ttk.Radiobutton(mode_frame, text="复制选定层级目录", value="selected_levels", variable=self.copy_mode, command=self.on_mode_change)
         rb.grid(row=0, column=2, padx=2)
         self.mode_radio_buttons.append(rb)
-        rb = ttk.Radiobutton(mode_frame, text="复制选定目录和文件", value="custom", variable=self.copy_mode, command=self.on_mode_change)
+        rb = ttk.Radiobutton(mode_frame, text="复制所有层级目录", value="all_levels", variable=self.copy_mode, command=self.on_mode_change)
         rb.grid(row=0, column=3, padx=2)
         self.mode_radio_buttons.append(rb)
-        rb = ttk.Radiobutton(mode_frame, text="导出目录和文件的名称", value="export_names", variable=self.copy_mode, command=self.on_mode_change)
+        rb = ttk.Radiobutton(mode_frame, text="复制选定目录和文件", value="custom", variable=self.copy_mode, command=self.on_mode_change)
         rb.grid(row=0, column=4, padx=2)
         self.mode_radio_buttons.append(rb)
-        ttk.Label(mode_frame, text="显示筛选:").grid(row=1, column=0, sticky='w', padx=(5, 2), pady=(6, 0))
+        rb = ttk.Radiobutton(mode_frame, text="导出目录和文件的名称", value="export_names", variable=self.copy_mode, command=self.on_mode_change)
+        rb.grid(row=0, column=5, padx=2)
+        self.mode_radio_buttons.append(rb)
+        ttk.Label(mode_frame, text="显示筛选：").grid(row=1, column=0, sticky='w', padx=(5, 2), pady=(6, 0))
         self.display_radio_buttons = []  # 20260402 100551 记录显示筛选单选按钮，任务执行期间可禁用
         rb = ttk.Radiobutton(mode_frame, text="默认显示", value="normal", variable=self.tree_display_mode, command=self.on_tree_display_mode_change)  # 20260402 101800 统一控件风格（ttk）
         rb.grid(row=1, column=1, padx=2, pady=(6, 0), sticky='w')
@@ -879,6 +941,9 @@ V1.1 功能：
         self.display_radio_buttons.append(rb)
         self.directory_size_checkbutton = ttk.Checkbutton(mode_frame, text="显示目录大小", variable=self.show_directory_sizes, command=self.on_directory_size_toggle)  # 20260402 100551 记录控件引用，任务执行期间可禁用
         self.directory_size_checkbutton.grid(row=1, column=4, padx=8, pady=(6, 0), sticky='w')
+        # 20261022 125500 新增：显示文件大小复选框，放在“显示筛选”行最后（默认不显示，提升大目录性能）
+        self.file_size_checkbutton = ttk.Checkbutton(mode_frame, text="显示文件大小", variable=self.show_file_sizes, command=self.on_file_size_toggle)
+        self.file_size_checkbutton.grid(row=1, column=5, padx=8, pady=(6, 0), sticky='w')
         
         # 导出格式选择框架
         self.export_format_frame = ttk.LabelFrame(main_frame, text="导出格式", padding="5")
@@ -927,16 +992,19 @@ V1.1 功能：
         btn = ttk.Button(rename_frame, text="全部目录字符替换", command=self.rename_all_items)
         btn.pack(side=tk.LEFT, padx=5)
         self.rename_buttons.append(btn)
-        btn = ttk.Button(rename_frame, text="多维重命名本级目录名", command=self.multi_rename_current_level)
+        btn = ttk.Button(rename_frame, text="本级目录名称增序", command=self.multi_rename_current_level)  # 20261022 110800 修改：按钮名由“多维重命名本级目录名”改为“本级目录名称增序”，为行末新增按钮腾出宽度
         btn.pack(side=tk.LEFT, padx=5)
         self.rename_buttons.append(btn)
-        btn = ttk.Button(rename_frame, text="多维重命名本级文件名", command=self.multi_rename_current_files)
+        btn = ttk.Button(rename_frame, text="本级文件名称增序", command=self.multi_rename_current_files)  # 20261022 110800 修改：按钮名由“多维重命名本级文件名”改为“本级文件名称增序”，为行末新增按钮腾出宽度
         btn.pack(side=tk.LEFT, padx=5)
         self.rename_buttons.append(btn)
         btn = ttk.Button(rename_frame, text="全层级目录名称修改", command=self.advanced_rename_directories)  # 20260906 184352 功能名由“全部目录名修改”改为“全层级目录名称修改”，支持先勾选部分目录再修改
         btn.pack(side=tk.LEFT, padx=5)
         self.rename_buttons.append(btn)
         btn = ttk.Button(rename_frame, text="各层级文件名称修改", command=self.advanced_rename_files)  # 20260906 184352 功能名由“文件名称修改”改为“各层级文件名称修改”（原20260828 104445 由“全部文件名修改”改为“文件名称修改”）
+        btn.pack(side=tk.LEFT, padx=5)
+        self.rename_buttons.append(btn)
+        btn = ttk.Button(rename_frame, text="按位置/定界符改名", command=self.create_positional_rename_dialog)  # 20261022 110800 新增：按字符位置或定界符批量改名入口，放在现有按钮同一行的最后
         btn.pack(side=tk.LEFT, padx=5)
         self.rename_buttons.append(btn)
         
@@ -949,10 +1017,11 @@ V1.1 功能：
         self.tree["columns"] = ("checked", "type", "size")
         # 20260906 201500 修改：列宽改为支持拖动调整并记忆，全部列固定宽度（stretch=False），
         # 确保“显示宽度=配置宽度”，拖动所见即所得，保存/恢复的列宽与用户看到的完全一致
-        self.tree.column("#0", width=270, stretch=False)
+        # 20261022 143000 修改：名称列 270→500、大小列 80→100，消除列表区域右侧空白
+        self.tree.column("#0", width=500, stretch=False)
         self.tree.column("checked", width=60, anchor='center', stretch=False)
         self.tree.column("type", width=80, stretch=False)
-        self.tree.column("size", width=80, anchor='e', stretch=False)
+        self.tree.column("size", width=100, anchor='e', stretch=False)
         
         # 配置树形视图的标签样式，添加行分隔效果
         self.tree.tag_configure('oddrow', background='#F2F6FF')  # 20260402 113400 行间底色更接近表格分隔视觉
@@ -1133,6 +1202,12 @@ V1.1 功能：
             self._show_warning_message("提示", "当前有任务正在执行，暂不支持切换目录大小显示。")  # 20260402 100551 任务运行期间禁止切换目录大小显示以避免状态混乱
             return
         self.refresh_tree()  # 20260402 085901 切换目录大小显示后刷新目录树
+
+    def on_file_size_toggle(self):  # 20261022 125500 新增：切换文件大小显示后刷新目录树
+        if getattr(self, "task_running", False):
+            self._show_warning_message("提示", "当前有任务正在执行，暂不支持切换文件大小显示。")
+            return
+        self.refresh_tree()
     
     def _set_task_ui_state(self, running):  # 20260402 100551 任务执行期间禁用关键控件，防止并发操作导致整体崩溃
         state = "disabled" if running else "normal"
@@ -1625,7 +1700,7 @@ V1.1 功能：
                         if mode == "selected_levels" and not is_dir:
                             show_checkbox = False
 
-                        size_str = self.get_size_in_kb(full_path)
+                        size_str = self.get_size_in_kb(full_path, _is_dir=is_dir)  # 20261022 140500 修改：复用 scandir 的 is_dir 结果，避免重复 os.path.isfile 系统调用
 
                         item_id = self.tree.insert(
                             parent, 'end', text=item,
@@ -1683,37 +1758,52 @@ V1.1 功能：
 
     # 20260906 205815 新增：目录树搜索功能
     def _search_in_tree(self):
-        """按文件名/目录名搜索源目录，弹出结果对话框"""
+        """按文件名/目录名搜索源目录，弹出结果对话框（20261022 134000 修改：改为分片异步搜索，避免大目录阻塞 UI）"""
         keyword = self.search_var.get().strip()
         if not keyword:
             self._show_warning_message("提示", "请输入搜索关键词！")
             return
         if not self._require_source_directory():
             return
+        if getattr(self, "task_running", False):
+            self._show_warning_message("提示", "当前有任务正在执行，请稍后再试。")
+            return
 
         source_path = self.source_dir.get()
         keyword_lower = keyword.lower()
-        results = []
-        try:
-            for dirpath, dirnames, filenames in os.walk(source_path):
-                for name in dirnames:
-                    if keyword_lower in name.lower():
-                        results.append({"name": name, "type": "目录", "path": os.path.join(dirpath, name)})
-                for name in filenames:
-                    if keyword_lower in name.lower():
-                        results.append({"name": name, "type": "文件", "path": os.path.join(dirpath, name)})
-                self._process_pending_ui()
-        except Exception as e:
-            self._show_error_message("错误", f"搜索过程中出错:\n{str(e)}")
-            return
+        self.search_result_var.set("正在搜索…")
+        self._reset_runtime_warnings()
 
-        if not results:
-            self.search_result_var.set(f"未找到匹配项")
-            self._show_info_message("搜索结果", f"未找到包含 \"{keyword}\" 的文件或目录。")
-            return
+        import threading
 
-        self.search_result_var.set(f"找到 {len(results)} 个匹配项")
-        self._show_search_results(results, keyword)
+        def search_task():
+            results = []
+            try:
+                for dirpath, dirnames, filenames in os.walk(source_path):
+                    for name in dirnames:
+                        if keyword_lower in name.lower():
+                            results.append({"name": name, "type": "目录", "path": os.path.join(dirpath, name)})
+                    for name in filenames:
+                        if keyword_lower in name.lower():
+                            results.append({"name": name, "type": "文件", "path": os.path.join(dirpath, name)})
+                    self._process_pending_ui()
+            except Exception as e:
+                self.root.after(0, lambda: self._show_error_message("错误", f"搜索过程中出错:\n{str(e)}"))
+                return results
+            return results
+
+        def run_search():
+            results = search_task()
+            self.root.after(0, lambda: on_search_done(results))
+
+        def on_search_done(results):
+            self.search_result_var.set(f"找到 {len(results)} 个匹配项")
+            if results:
+                self._show_search_results(results, keyword)
+            else:
+                self._show_info_message("搜索结果", f"未找到包含 \"{keyword}\" 的文件或目录。")
+
+        threading.Thread(target=run_search, daemon=True).start()
 
     def _show_search_results(self, results, keyword):
         """显示搜索结果对话框"""
@@ -2836,22 +2926,22 @@ V1.1 功能：
         if not self._require_source_directory():
             return
             
-        dialog, find_var, replace_var = self.create_rename_dialog("本级目录字符替换")
-        
+        dialog, find_var, replace_var, seq_collect = self.create_rename_dialog("本级目录字符替换")  # 20261022 123000 修改：接收新增的序号参数收集函数
+
         def do_rename():
             find_text = find_var.get()
             replace_text = replace_var.get()
-            
+
             if not find_text:
                 self._show_warning_message("警告", "请输入要查找的字符串!")
                 return
-            
+
             dialog.destroy()
-            self._start_rename_current_level_replace(find_text, replace_text)  # 20260402 094929 分片执行：启动本级目录字符替换
+            self._start_rename_current_level_replace(find_text, replace_text, seq_collect())  # 20261022 123000 修改：传入序号参数
                 
         ttk.Button(dialog, text="确定", command=do_rename).pack(pady=10)
 
-    def _start_rename_current_level_replace(self, find_text, replace_text):  # 20260402 094929 新增：本级目录字符替换（分片任务）
+    def _start_rename_current_level_replace(self, find_text, replace_text, num_options=None):  # 20261022 123000 修改：新增序号参数
         if getattr(self, "task_running", False):
             self._show_warning_message("提示", "当前有任务正在执行，请稍后再试。")
             return
@@ -2884,6 +2974,8 @@ V1.1 功能：
                 update_history=False
             )
             return
+
+        candidates = self._apply_sequence_to_plans(candidates, source_path, num_options, True)  # 20261022 123000 新增：重名时按计划加序号
 
         self.task_runner = self.TaskRunner(self, description="本级目录字符替换", total=len(candidates))  # 20260402 094929 启动任务
 
@@ -2943,28 +3035,39 @@ V1.1 功能：
         if not self._require_source_directory():
             return
             
-        dialog, find_var, replace_var = self.create_rename_dialog("全部目录字符替换")
-        
+        dialog, find_var, replace_var, seq_collect = self.create_rename_dialog("全部目录字符替换")  # 20261022 123000 修改：接收新增的序号参数收集函数
+
         def do_rename():
             find_text = find_var.get()
             replace_text = replace_var.get()
-            
+
             if not find_text:
                 self._show_warning_message("警告", "请输入要查找的字符串!")
                 return
-            
+
             dialog.destroy()
-            self._start_rename_all_items_replace(find_text, replace_text)  # 20260402 094929 分片执行：启动全部目录字符替换
+            self._start_rename_all_items_replace(find_text, replace_text, seq_collect())  # 20261022 123000 修改：传入序号参数
                 
         ttk.Button(dialog, text="确定", command=do_rename).pack(pady=10)
 
-    def _start_rename_all_items_replace(self, find_text, replace_text):  # 20260402 094929 新增：全部目录字符替换（分片任务）
+    def _start_rename_all_items_replace(self, find_text, replace_text, num_options=None):  # 20261022 123000 修改：新增序号参数
         if getattr(self, "task_running", False):
             self._show_warning_message("提示", "当前有任务正在执行，请稍后再试。")
             return
 
         root_path = self.source_dir.get()
         self._reset_runtime_warnings()
+
+        # 20261022 123000 新增：启用序号时先做只读预扫描，按“父目录先改名”的执行路径构建计划表
+        plan_by_exec = {}
+        if num_options and num_options.get("enabled"):
+            def match_replace(name):
+                if find_text in name:
+                    new_name = name.replace(find_text, replace_text)
+                    return (new_name != name, new_name)
+                return (False, name)
+            _, plan_by_exec = self._build_advanced_sequence_plan(match_replace, root_path, None, "directory", num_options)
+
         matched_count = {"value": 0}
         renamed_count = {"value": 0}
         skipped_count = {"value": 0}
@@ -2985,8 +3088,15 @@ V1.1 功能：
                 is_dir = os.path.isdir(full_path)
                 current_path = full_path
 
-                if find_text in item:
-                    new_name = item.replace(find_text, replace_text)
+                # 20261022 123000 修改：启用序号时以预扫描计划表为准（键为“父目录已改名后的执行路径”），否则保持原替换逻辑
+                if plan_by_exec:
+                    new_name = plan_by_exec.get(os.path.normcase(os.path.join(dir_path, item)))
+                    matched = new_name is not None
+                else:
+                    matched = find_text in item
+                    new_name = item.replace(find_text, replace_text) if matched else item
+
+                if matched:
                     if new_name != item:
                         matched_count["value"] += 1
                         new_path, warning_message = self._prepare_rename_target(dir_path, item, new_name, "项目")
@@ -3220,21 +3330,25 @@ V1.1 功能：
         controls["suffix_num_combo"].grid(row=0, column=8, padx=10)
         controls["suffix_num_combo"].set("1")
         
+        # 20261022 123000 新增：重名时自动加序号常驻选项组（多维重命名本级目录名）
+        seq_frame, seq_collect = self._build_sequence_options_widget(main_frame)
+        seq_frame.pack(fill=tk.X, pady=(0, 10))
+
         # 按钮框架
         button_frame = ttk.Frame(main_frame)
         button_frame.pack(pady=20)
-        
+
         def do_multi_rename():
             try:
-                self.execute_multi_rename(directories, controls)
+                self.execute_multi_rename(directories, controls, seq_collect())  # 20261022 123000 修改：传入序号参数
                 dialog.destroy()
             except Exception as e:
                 self._show_error_message("错误", f"重命名过程中出错: {str(e)}")
-        
+
         ttk.Button(button_frame, text="确定", command=do_multi_rename).pack(side=tk.LEFT, padx=10)
         ttk.Button(button_frame, text="取消", command=dialog.destroy).pack(side=tk.LEFT, padx=10)
-        
-    def execute_multi_rename(self, directories, controls=None):
+
+    def execute_multi_rename(self, directories, controls=None, num_options=None):  # 20261022 123000 修改：新增序号参数
         """执行批量重命名"""
         if getattr(self, "task_running", False):
             self._show_warning_message("提示", "当前有任务正在执行，请稍后再试。")
@@ -3248,6 +3362,8 @@ V1.1 功能：
             new_name = self._build_multi_rename_name(dir_name, i + 1, controls)
             if new_name != dir_name:
                 plans.append((dir_name, new_name))
+
+        plans = self._apply_sequence_to_plans(plans, source_path, num_options, True)  # 20261022 123000 新增：重名时按计划加序号
 
         if not plans:
             self._finalize_tree_change(
@@ -3411,21 +3527,25 @@ V1.1 功能：
         controls["suffix_num_combo"].grid(row=0, column=8, padx=10)
         controls["suffix_num_combo"].set("1")
         
+        # 20261022 123000 新增：重名时自动加序号常驻选项组（多维重命名本级文件名）
+        seq_frame, seq_collect = self._build_sequence_options_widget(main_frame)
+        seq_frame.pack(fill=tk.X, pady=(0, 10))
+
         # 按钮框架
         button_frame = ttk.Frame(main_frame)
         button_frame.pack(pady=20)
-        
+
         def do_multi_file_rename():
             try:
-                self.execute_multi_file_rename(files, controls)
+                self.execute_multi_file_rename(files, controls, seq_collect())  # 20261022 123000 修改：传入序号参数
                 dialog.destroy()
             except Exception as e:
                 self._show_error_message("错误", f"重命名过程中出错: {str(e)}")
-        
+
         ttk.Button(button_frame, text="确定", command=do_multi_file_rename).pack(side=tk.LEFT, padx=10)
         ttk.Button(button_frame, text="取消", command=dialog.destroy).pack(side=tk.LEFT, padx=10)
-        
-    def execute_multi_file_rename(self, files, controls=None):
+
+    def execute_multi_file_rename(self, files, controls=None, num_options=None):  # 20261022 123000 修改：新增序号参数
         """执行批量文件重命名"""
         if getattr(self, "task_running", False):
             self._show_warning_message("提示", "当前有任务正在执行，请稍后再试。")
@@ -3440,6 +3560,8 @@ V1.1 功能：
             new_name = self._build_multi_rename_name(name_part, i + 1, controls, ext_part)
             if new_name != file_name:
                 plans.append((file_name, new_name))
+
+        plans = self._apply_sequence_to_plans(plans, source_path, num_options, False)  # 20261022 123000 新增：重名时按计划加序号
 
         if not plans:
             self._finalize_tree_change(
@@ -3540,20 +3662,22 @@ V1.1 功能：
         else:
             return str(index)
     
-    def get_size_in_kb(self, path):
-        """获取文件或目录的大小，单位为KB"""
+    def get_size_in_kb(self, path, _is_dir=None):
+        """获取文件或目录的大小，单位为KB（20261022 140500 新增 _is_dir 参数，复用 scandir 已判定结果避免重复 os.path.isfile）"""
         try:
-            if os.path.isfile(path):
-                # 文件大小
+            if _is_dir is None:
+                _is_dir = os.path.isdir(path)
+            if not _is_dir:
+                # 20261022 125500 修改：未勾选“显示文件大小”时返回空字符串，提升大目录性能
+                if not self.show_file_sizes.get():
+                    return ""
                 size_bytes = os.path.getsize(path)
                 return self._format_size_in_kb(size_bytes)
-            elif os.path.isdir(path):
+            else:
                 total_size = self.directory_size_cache.get(path)
                 if total_size is None:
                     return "N/A"
                 return self._format_size_in_kb(total_size)
-            else:
-                return "N/A"
         except (OSError, IOError):
             return "N/A"
     
@@ -3696,6 +3820,473 @@ V1.1 功能：
                 return False, name
         return match_item
 
+    def create_positional_rename_dialog(self):
+        """创建“按位置/定界符改名”对话框（20261022 112500 新增）
+
+        作用与目的：把第 1～9 项改名需求集中到一个入口，覆盖：
+        第 x 个字符前/后的删除、替换、添加；定界符前/后的删除、替换、添加；前/后 X 个字符的删除、替换。
+        同时提供计数方式（汉字计 2 / 每字符计 1）、扩展名保护、重命名冲突时自动加序号等选项，先预览再执行。
+        作用对象：目录树中已勾选的文件和目录。
+        """
+        selected_paths = self.get_checked_file_paths() + self.get_checked_directory_paths()
+        if not selected_paths:
+            self._show_warning_message("提示", "请先在目录树中勾选需要改名的文件或目录。")
+            return
+
+        # 功能与允许的动作组合（覆盖九项需求）
+        function_choices = [
+            ("第 x 个字符前：删除 / 替换", RULE_POS_BEFORE, (ACTION_DELETE, ACTION_REPLACE)),
+            ("第 x 个字符后：删除 / 替换", RULE_POS_AFTER, (ACTION_DELETE, ACTION_REPLACE)),
+            ("第 x 个字符前：添加文本", RULE_POS_BEFORE, (ACTION_INSERT,)),
+            ("第 x 个字符后：添加文本", RULE_POS_AFTER, (ACTION_INSERT,)),
+            ("定界符前所有字符：删除 / 替换 / 添加", RULE_DELIM_BEFORE, (ACTION_DELETE, ACTION_REPLACE, ACTION_INSERT)),
+            ("定界符后所有字符：删除 / 替换 / 添加", RULE_DELIM_AFTER, (ACTION_DELETE, ACTION_REPLACE, ACTION_INSERT)),
+            ("前 X 个字符：删除 / 替换", RULE_HEAD, (ACTION_DELETE, ACTION_REPLACE)),
+            ("后 X 个字符：删除 / 替换", RULE_TAIL, (ACTION_DELETE, ACTION_REPLACE)),
+        ]
+
+        dialog = tk.Toplevel(self.root)
+        dialog.title("按位置/定界符改名")
+        dialog.minsize(980, 600)  # 20261022 133500 修改：窗口最小宽度由 720 调整为 980，参数/选项左右布局，示例区增至 7 行
+        dialog.resizable(True, True)
+        dialog.transient(self.root)
+        dialog.grab_set()
+
+        dialog.grid_rowconfigure(0, weight=1)
+        dialog.grid_columnconfigure(0, weight=1)
+
+        main_frame = ttk.Frame(dialog, padding="15")
+        main_frame.grid(row=0, column=0, sticky='nsew')
+        main_frame.grid_columnconfigure(0, weight=1)
+
+        # 标题与已选数量
+        title_frame = ttk.Frame(main_frame)
+        title_frame.grid(row=0, column=0, sticky='ew', pady=(0, 8))
+        ttk.Label(title_frame, text="按位置/定界符改名", font=("TkDefaultFont", 12, "bold")).pack(side=tk.LEFT)
+        file_count = sum(1 for p in selected_paths if os.path.isfile(p))
+        dir_count = len(selected_paths) - file_count
+        ttk.Label(
+            title_frame,
+            text=f"已勾选 {len(selected_paths)} 项（文件 {file_count}，目录 {dir_count}）",
+            foreground="#3366CC"
+        ).pack(side=tk.RIGHT)
+
+        # 功能与动作
+        rule_frame = ttk.LabelFrame(main_frame, text="变换功能", padding="10")
+        rule_frame.grid(row=1, column=0, sticky='ew', pady=(0, 8))
+        rule_frame.grid_columnconfigure(1, weight=1)
+
+        func_var = tk.StringVar(value=function_choices[0][0])
+        ttk.Label(rule_frame, text="功能：").grid(row=0, column=0, sticky='w')
+        func_combo = ttk.Combobox(rule_frame, textvariable=func_var, state='readonly',
+                                  values=[item[0] for item in function_choices], width=42)  # 20261022 140000 修改：下拉框宽度由 34 增至 42，右侧到约窗口中心位置
+        func_combo.current(0)
+        func_combo.grid(row=0, column=1, sticky='w', padx=(0, 6))
+
+        action_var = tk.StringVar(value=ACTION_DELETE)
+        ttk.Label(rule_frame, text="动作：").grid(row=0, column=2, sticky='w', padx=(8, 0))  # 20261022 140000 修改：右侧单选组左移，padx 由 (0,0) 调整为 (8,0)
+        action_frame = ttk.Frame(rule_frame)
+        action_frame.grid(row=0, column=3, sticky='w')
+        action_radios = {}
+        for idx, (value, label) in enumerate(((ACTION_DELETE, "删除"), (ACTION_REPLACE, "替换为"), (ACTION_INSERT, "添加"))):
+            radio = ttk.Radiobutton(action_frame, text=label, value=value, variable=action_var)
+            radio.grid(row=0, column=idx, sticky='w', padx=(0, 10))
+            action_radios[value] = radio
+
+        # 20261022 133500 修改：参数、选项左右布局（参数左、选项右），压缩纵向空间
+        param_options_frame = ttk.Frame(main_frame)
+        param_options_frame.grid(row=2, column=0, sticky='ew', pady=(0, 8))
+        param_options_frame.grid_columnconfigure(0, weight=1)
+        param_options_frame.grid_columnconfigure(1, weight=1)
+
+        # 参数区（按所选功能动态显示）
+        param_frame = ttk.LabelFrame(param_options_frame, text="参数（位置字符按下方计数方式计算）", padding="10")
+        param_frame.grid(row=0, column=0, sticky='nsew', padx=(0, 4))
+        param_frame.grid_columnconfigure(0, weight=1)
+
+        x_var = tk.StringVar(value="10")
+        y_var = tk.StringVar(value="4")
+        text_var = tk.StringVar()
+        delim_var = tk.StringVar(value="-")
+        occurrence_var = tk.StringVar(value="1")
+
+        x_row = ttk.Frame(param_frame)
+        x_row.grid(row=0, column=0, sticky='ew', pady=2)
+        ttk.Label(x_row, text="位　置X：").pack(side=tk.LEFT)  # 20261022 140000 修改：“位置 x：”改为“位　置X：”，与下方“字符数y：”上下对齐，冒号全角
+        ttk.Entry(x_row, textvariable=x_var, width=8).pack(side=tk.LEFT)
+        ttk.Label(x_row, text="（第 x 个字符，从 1 起算）", foreground="#666666").pack(side=tk.LEFT, padx=(8, 0))
+
+        y_row = ttk.Frame(param_frame)
+        y_row.grid(row=1, column=0, sticky='ew', pady=2)
+        ttk.Label(y_row, text="字符数 y：").pack(side=tk.LEFT)
+        ttk.Entry(y_row, textvariable=y_var, width=8).pack(side=tk.LEFT)
+        y_hint_label = ttk.Label(y_row, text="", foreground="#666666")
+        y_hint_label.pack(side=tk.LEFT, padx=(8, 0))
+
+        delim_row = ttk.Frame(param_frame)
+        delim_row.grid(row=2, column=0, sticky='ew', pady=2)
+        ttk.Label(delim_row, text="定界符：").pack(side=tk.LEFT)
+        ttk.Entry(delim_row, textvariable=delim_var, width=8).pack(side=tk.LEFT)
+        ttk.Label(delim_row, text="第").pack(side=tk.LEFT, padx=(10, 2))
+        ttk.Spinbox(delim_row, from_=0, to=99, width=4, textvariable=occurrence_var).pack(side=tk.LEFT)
+        ttk.Label(delim_row, text="次（0 表示最后一次）", foreground="#666666").pack(side=tk.LEFT, padx=(2, 0))
+
+        text_row = ttk.Frame(param_frame)
+        text_row.grid(row=3, column=0, sticky='ew', pady=2)
+        ttk.Label(text_row, text="文本：").pack(side=tk.LEFT)
+        ttk.Entry(text_row, textvariable=text_var).pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+        # 选项
+        options_frame = ttk.LabelFrame(param_options_frame, text="选项", padding="10")
+        options_frame.grid(row=0, column=1, sticky='nsew', padx=(4, 0))
+
+        count_mode = tk.StringVar(value=COUNT_MODE_UNIT)
+        ttk.Label(options_frame, text="计数方式：").grid(row=0, column=0, sticky='w')
+        ttk.Radiobutton(options_frame, text="汉字计 2、其余计 1（推荐）", value=COUNT_MODE_UNIT,
+                        variable=count_mode).grid(row=0, column=1, sticky='w', padx=(0, 14))
+        ttk.Radiobutton(options_frame, text="每个字符均计 1", value=COUNT_MODE_CHAR,
+                        variable=count_mode).grid(row=0, column=2, sticky='w')
+
+        protect_extension = tk.BooleanVar(value=True)
+        ttk.Checkbutton(options_frame, text="保护扩展名（不参与位置计算和变换；目录名不受影响）",
+                        variable=protect_extension).grid(row=1, column=0, columnspan=3, sticky='w', pady=(6, 0))
+
+        # 重名时自动加序号（常驻选项组，20261022 133500 修改：压缩为两行，减少纵向占用）
+        seq_frame = ttk.LabelFrame(main_frame, text="重名时自动加序号（可选，启用后仅在检测到重名时对全批加序号）", padding="10")
+        seq_frame.grid(row=3, column=0, sticky='ew', pady=(0, 8))
+        seq_frame.grid_columnconfigure(3, weight=1)
+
+        seq_enable = tk.BooleanVar(value=False)
+        ttk.Checkbutton(seq_frame, text="启用自动加序号", variable=seq_enable).grid(row=0, column=0, columnspan=2, sticky='w')
+
+        seq_position = tk.StringVar(value=POSITION_PREFIX)
+        ttk.Label(seq_frame, text="序号位置：").grid(row=0, column=2, sticky='w', padx=(20, 0))
+        position_frame = ttk.Frame(seq_frame)
+        position_frame.grid(row=0, column=3, sticky='w')
+        ttk.Radiobutton(position_frame, text="前置（序号+连接符）", value=POSITION_PREFIX,
+                        variable=seq_position).pack(side=tk.LEFT, padx=(0, 12))
+        ttk.Radiobutton(position_frame, text="后置（连接符+序号）", value=POSITION_SUFFIX,
+                        variable=seq_position).pack(side=tk.LEFT)
+
+        seq_type_var = tk.StringVar(value="1")
+        seq_connector_var = tk.StringVar(value="-")
+        ttk.Label(seq_frame, text="序号类型：").grid(row=1, column=0, sticky='w', pady=(6, 0))
+        ttk.Combobox(seq_frame, textvariable=seq_type_var, state='readonly', width=6,
+                     values=("1", "A", "a", "Ⅰ")).grid(row=1, column=1, sticky='w', pady=(6, 0))
+        ttk.Label(seq_frame, text="连接符：").grid(row=1, column=2, sticky='w', padx=(14, 4), pady=(6, 0))
+        ttk.Combobox(seq_frame, textvariable=seq_connector_var, width=6,
+                     values=("-", ".", "_", "、", " ")).grid(row=1, column=3, sticky='w', pady=(6, 0))
+
+        seq_start_var = tk.StringVar(value="1")
+        seq_pad_var = tk.StringVar(value="0")
+        seq_reset_per_dir = tk.BooleanVar(value=False)
+        ttk.Label(seq_frame, text="起始序号：").grid(row=1, column=4, sticky='w', padx=(10, 0), pady=(6, 0))  # 20261022 140000 修改：padx 由 20 减至 10，向左移动
+        ttk.Spinbox(seq_frame, from_=1, to=9999, width=6, textvariable=seq_start_var).grid(row=1, column=5, sticky='w', pady=(6, 0))
+        ttk.Label(seq_frame, text="补零位数：").grid(row=1, column=6, sticky='w', padx=(10, 4), pady=(6, 0))  # 20261022 140000 修改：padx 由 14 减至 10，向左移动
+        ttk.Spinbox(seq_frame, from_=0, to=6, width=6, textvariable=seq_pad_var).grid(row=1, column=7, sticky='w', pady=(6, 0))
+        ttk.Checkbutton(seq_frame, text="每个目录重新从 1 开始（未勾选时整批连续编号）",
+                        variable=seq_reset_per_dir).grid(row=2, column=0, columnspan=8, sticky='w', pady=(6, 0))
+
+        # 实时示例（20261022 141500 修改：由 Text 改为 Treeview 表格化，左侧原文件名、右侧新文件名，中间竖线对齐）
+        sample_frame = ttk.LabelFrame(main_frame, text="实时示例（取已勾选项目的前 5 项）", padding="8")
+        sample_frame.grid(row=4, column=0, sticky='ew', pady=(0, 8))
+        sample_frame.grid_columnconfigure(0, weight=1)
+
+        sample_tree = ttk.Treeview(sample_frame, columns=("old", "new"), show="headings", height=7)
+        sample_tree.heading("old", text="原文件名")
+        sample_tree.heading("new", text="新文件名")
+        sample_tree.column("old", width=280, anchor='w')
+        sample_tree.column("new", width=280, anchor='w')
+        sample_scroll = ttk.Scrollbar(sample_frame, orient="vertical", command=sample_tree.yview)
+        sample_tree.configure(yscrollcommand=sample_scroll.set)
+        sample_tree.grid(row=0, column=0, sticky='ew')
+        sample_scroll.grid(row=0, column=1, sticky='ns')
+
+        def set_sample_items(items):
+            """items: list of (old_name, new_name, status)"""
+            for child in sample_tree.get_children():
+                sample_tree.delete(child)
+            for old_name, new_name, status in items:
+                display_new = new_name
+                if status == "error":
+                    display_new = f"× {new_name}"
+                elif status == "unchanged":
+                    display_new = "（无变化）"
+                sample_tree.insert("", "end", values=(old_name, display_new))
+
+        def current_function():
+            return function_choices[func_combo.current()]
+
+        def build_rule():
+            _, rule_type, _ = current_function()
+            return {
+                'type': rule_type,
+                'action': action_var.get(),
+                'x': x_var.get(),
+                'y': y_var.get(),
+                'text': text_var.get(),
+                'delimiter': delim_var.get(),
+                'occurrence': occurrence_var.get(),
+                'count_mode': count_mode.get(),
+                'protect_extension': protect_extension.get(),
+            }
+
+        def update_sample(*args):
+            rule = build_rule()
+            items = []
+            for path in selected_paths[:5]:
+                old_name = os.path.basename(path)
+                is_dir = os.path.isdir(path)
+                new_name, error = apply_rule(old_name, rule, is_dir)
+                if error:
+                    items.append((old_name, error, "error"))
+                elif new_name == old_name:
+                    items.append((old_name, "（无变化）", "unchanged"))
+                else:
+                    items.append((old_name, new_name, "ok"))
+            set_sample_items(items if items else [("（无示例）", "", "ok")])
+
+        def refresh_params(*args):
+            _, rule_type, allowed_actions = current_function()
+            for value, radio in action_radios.items():
+                radio.configure(state=('normal' if value in allowed_actions else 'disabled'))
+            if action_var.get() not in allowed_actions:
+                action_var.set(allowed_actions[0])
+
+            action = action_var.get()
+            show_x = rule_type in (RULE_POS_BEFORE, RULE_POS_AFTER, RULE_HEAD, RULE_TAIL)
+            show_y = rule_type in (RULE_POS_BEFORE, RULE_POS_AFTER) and action != ACTION_INSERT
+            show_delim = rule_type in (RULE_DELIM_BEFORE, RULE_DELIM_AFTER)
+            show_text = action in (ACTION_REPLACE, ACTION_INSERT)
+
+            for row, visible in ((x_row, show_x), (y_row, show_y), (delim_row, show_delim), (text_row, show_text)):
+                if visible:
+                    row.grid()
+                else:
+                    row.grid_remove()
+
+            if rule_type == RULE_POS_BEFORE:
+                y_hint_label.configure(text="（第 x 个字符及其之前的 y 个字符）")
+            elif rule_type == RULE_POS_AFTER:
+                y_hint_label.configure(text="（第 x 个字符之后的 y 个字符，留空表示到末尾）")
+            else:
+                y_hint_label.configure(text="")
+
+            update_sample()
+
+        def do_preview():
+            rule = build_rule()
+            if rule['type'] in (RULE_DELIM_BEFORE, RULE_DELIM_AFTER) and not rule['delimiter']:
+                self._show_warning_message("提示", "请输入定界符。")
+                return
+            num_options = {
+                'enabled': seq_enable.get(),
+                'position': seq_position.get(),
+                'num_type': seq_type_var.get(),
+                'connector': seq_connector_var.get(),
+                'start': seq_start_var.get(),
+                'pad_width': seq_pad_var.get(),
+                'reset_per_dir': seq_reset_per_dir.get(),
+            }
+
+            def confirm_cb():
+                self.execute_positional_rename(selected_paths, rule, preview_mode=False, num_options=num_options)
+                dialog.destroy()
+
+            self.execute_positional_rename(selected_paths, rule, preview_mode=True,
+                                           num_options=num_options, on_preview_confirm=confirm_cb)
+
+        # 事件绑定（放在函数定义之后，避免引用未定义）
+        func_combo.bind('<<ComboboxSelected>>', lambda event: refresh_params())
+        action_var.trace_add('write', lambda *a: refresh_params())
+        for var in (x_var, y_var, text_var, delim_var, occurrence_var):
+            var.trace_add('write', lambda *a: update_sample())
+        for var in (count_mode, protect_extension):
+            var.trace_add('write', lambda *a: update_sample())
+
+        # 底部按钮（20261022 133500 修改：行号由 6 调整为 5，配合上方布局压缩）
+        button_frame = ttk.Frame(main_frame)
+        button_frame.grid(row=5, column=0, sticky='ew', pady=(6, 0))
+        button_container = ttk.Frame(button_frame)
+        button_container.pack()
+        ttk.Button(button_container, text="预览并执行", command=do_preview).grid(row=0, column=0, padx=(0, 10))
+        ttk.Button(button_container, text="取消", command=dialog.destroy).grid(row=0, column=1)
+
+        refresh_params()
+
+        # 动态计算对话框尺寸（20261022 133500 修改：最小宽度 980，高度按内容自适应）
+        dialog.update_idletasks()
+        dialog_width = max(980, main_frame.winfo_reqwidth() + 30)
+        dialog_height = main_frame.winfo_reqheight() + 40
+        screen_width = dialog.winfo_screenwidth()
+        screen_height = dialog.winfo_screenheight()
+        dialog_height = min(dialog_height, int(screen_height * 0.9))
+        x = (screen_width - dialog_width) // 2
+        y = max(30, (screen_height - dialog_height) // 2)
+        dialog.geometry(f"{dialog_width}x{dialog_height}+{x}+{y}")
+
+    def _build_positional_rename_plans(self, paths, rule, num_options=None):
+        """计算按位置/定界符改名的候选新名与执行状态（20261022 112500 新增）
+
+        返回列表，每项含 path、old_name、is_directory、new_name、status。
+        status 为“可执行”表示可以改名，其余文本为跳过原因。
+        """
+        entries = []
+        for path in paths:
+            old_name = os.path.basename(path)
+            is_dir = os.path.isdir(path)
+            new_name, error = apply_rule(old_name, rule, is_dir)
+            entries.append({
+                'path': path,
+                'old_name': old_name,
+                'is_directory': is_dir,
+                'new_name': new_name or '',
+                'error': error,
+            })
+
+        # 仅对规则运算成功的项规划序号（重名时对全批加序号）
+        valid_indices = [index for index, entry in enumerate(entries) if entry['error'] is None]
+        valid_entries = [
+            {'path': entries[index]['path'], 'new_name': entries[index]['new_name'],
+             'is_directory': entries[index]['is_directory']}
+            for index in valid_indices
+        ]
+        planned_names = plan_batch_sequence(valid_entries, num_options or {}, exists_func=os.path.exists)
+        for index, name in zip(valid_indices, planned_names):
+            entries[index]['new_name'] = name
+
+        # 批次内重名分组（同一目录 + 同名，Windows 大小写不敏感）
+        grouped = {}
+        for index in valid_indices:
+            entry = entries[index]
+            key = (os.path.normcase(os.path.dirname(entry['path'])), os.path.normcase(entry['new_name']))
+            grouped.setdefault(key, []).append(index)
+
+        for index, entry in enumerate(entries):
+            if entry['error']:
+                entry['status'] = entry['error']
+                continue
+            if not entry['new_name'] or entry['new_name'] == entry['old_name']:
+                entry['status'] = '无变化'
+                continue
+            key = (os.path.normcase(os.path.dirname(entry['path'])), os.path.normcase(entry['new_name']))
+            if len(grouped.get(key, [])) > 1:
+                entry['status'] = '本批次内新名称重复'
+                continue
+            target = os.path.join(os.path.dirname(entry['path']), entry['new_name'])
+            if os.path.normcase(target) != os.path.normcase(entry['path']) and os.path.exists(target):
+                entry['status'] = '目标名称已存在'
+                continue
+            entry['status'] = '可执行'
+        return entries
+
+    def execute_positional_rename(self, paths, rule, preview_mode=True, num_options=None, on_preview_confirm=None):
+        """执行按位置/定界符改名：预览或分片执行，并写入批次操作历史以支持撤销/重做（20261022 112500 新增）
+
+        执行顺序按路径层级深度降序（先深层后浅层），避免先改父目录导致子项路径失效；
+        批次记录格式与既有重命名功能一致，撤销时逆序回放即可正确还原。
+        """
+        entries = self._build_positional_rename_plans(paths, rule, num_options)
+
+        if preview_mode:
+            reference_root = self.source_dir.get()
+            preview_items = []
+            for entry in entries:
+                try:
+                    relative_path = os.path.relpath(entry['path'], reference_root) if reference_root else entry['path']
+                except Exception:
+                    relative_path = entry['path']
+                preview_items.append({
+                    'path': entry['path'],
+                    'relative_path': relative_path,
+                    'old_name': entry['old_name'],
+                    'new_name': entry['new_name'],
+                    'type': '目录' if entry['is_directory'] else '文件',
+                    'status': entry['status'],
+                })
+            if not preview_items:
+                self._show_info_message("预览结果", "没有需要处理的项目。")
+                return
+            self.show_preview_dialog(preview_items, on_confirm=on_preview_confirm)
+            return
+
+        if getattr(self, "task_running", False):
+            self._show_warning_message("提示", "当前有任务正在执行，请稍后再试。")
+            return
+
+        executable_entries = [entry for entry in entries if entry['status'] == '可执行']
+        counters = {
+            'renamed': 0,
+            'skipped': len(entries) - len(executable_entries),
+            'failed': 0,
+        }
+        self._reset_runtime_warnings()
+        plan_map = {os.path.normcase(entry['path']): entry for entry in executable_entries}
+
+        def step_fn(item_path, batch_ops):
+            entry = plan_map.get(os.path.normcase(item_path))
+            if entry is None:
+                return ("skipped", [])
+            item_label = "目录" if entry['is_directory'] else "文件"
+            if not os.path.exists(entry['path']):
+                counters['skipped'] += 1
+                self._add_runtime_warning(f"{item_label} '{entry['old_name']}' 已不存在，跳过")
+                return ("skipped", [])
+            new_path, warning_message = self._prepare_rename_target(
+                os.path.dirname(entry['path']), entry['old_name'], entry['new_name'], item_label
+            )
+            if warning_message or new_path is None:
+                counters['skipped'] += 1
+                if warning_message:
+                    self._add_runtime_warning(warning_message)
+                return ("skipped", [])
+            try:
+                os.rename(entry['path'], new_path)
+                batch_ops.append({
+                    'type': 'rename',
+                    'details': {
+                        'old_path': entry['path'],
+                        'new_path': new_path,
+                        'operation_type': 'positional_rename'
+                    }
+                })
+                counters['renamed'] += 1
+            except Exception:
+                counters['failed'] += 1
+                self._add_runtime_warning(f"重命名失败：{entry['old_name']}")
+            self._process_pending_ui()
+            return ("processed", [])
+
+        def on_done(summary):
+            if summary.get("batch_operations"):
+                description = "按位置/定界符改名"
+                if summary.get("cancelled"):
+                    description += "（已取消）"
+                self.operation_history.add_operation('batch', {
+                    'description': description,
+                    'operation_type': 'positional_rename',
+                    'operations': summary["batch_operations"]
+                })
+                self.update_history_buttons()
+
+            message_prefix = "已取消！" if summary.get("cancelled") else "重命名完成！"
+            self._finalize_tree_change(
+                "完成",
+                f"{message_prefix}计划处理 {len(entries)} 项，成功 {counters['renamed']} 项，"
+                f"跳过 {counters['skipped']} 项，失败 {counters['failed']} 项。",
+                refresh_mode=self.tree_display_mode.get(),
+                warning_title="重命名提示",
+                update_history=counters["renamed"] > 0
+            )
+
+        ordered_paths = sorted([entry['path'] for entry in executable_entries],
+                               key=lambda p: p.count(os.sep), reverse=True)
+        if not ordered_paths:
+            self._show_info_message("提示", "按当前条件没有可执行的项目。")
+            return
+        self.task_runner = self.TaskRunner(self, description="按位置/定界符改名")
+        self.task_runner.start(ordered_paths, step_fn, on_done)
+
     def create_file_rename_dialog(self, selected_paths, target_type="file"):
         """创建名称修改对话框（仅针对已勾选的文件/目录，提供实时匹配数量提示）
         20260906 184352 扩展支持目录类型：target_type="file" 为“各层级文件名称修改”，"directory" 为“全层级目录名称修改”"""
@@ -3779,9 +4370,46 @@ V1.1 功能：
         preview_mode = tk.BooleanVar(value=True)
         ttk.Checkbutton(options_frame, text="预览模式（推荐：先预览将要修改的项目，确认后再执行）", variable=preview_mode).grid(row=1, column=0, sticky='w')
 
+        # 20261022 121500 新增：重名时自动加序号（常驻选项组，与“按位置/定界符改名”一致的参数）
+        seq_frame = ttk.LabelFrame(main_frame, text="重名时自动加序号（可选，启用后仅在检测到重名时对全批加序号）", padding="10")
+        seq_frame.grid(row=4, column=0, sticky='ew', pady=(0, 8))
+        seq_frame.grid_columnconfigure(3, weight=1)
+
+        seq_enable = tk.BooleanVar(value=False)
+        ttk.Checkbutton(seq_frame, text="启用自动加序号", variable=seq_enable).grid(row=0, column=0, columnspan=2, sticky='w')
+
+        seq_position = tk.StringVar(value="prefix")
+        ttk.Label(seq_frame, text="序号位置：").grid(row=1, column=0, sticky='w', pady=(6, 0))
+        seq_position_frame = ttk.Frame(seq_frame)
+        seq_position_frame.grid(row=1, column=1, columnspan=3, sticky='w', pady=(6, 0))
+        ttk.Radiobutton(seq_position_frame, text="前置（序号+连接符）", value="prefix",
+                        variable=seq_position).pack(side=tk.LEFT, padx=(0, 12))
+        ttk.Radiobutton(seq_position_frame, text="后置（连接符+序号）", value="suffix",
+                        variable=seq_position).pack(side=tk.LEFT)
+
+        seq_type_var = tk.StringVar(value="1")
+        seq_connector_var = tk.StringVar(value="-")
+        ttk.Label(seq_frame, text="序号类型：").grid(row=2, column=0, sticky='w', pady=(6, 0))
+        ttk.Combobox(seq_frame, textvariable=seq_type_var, state='readonly', width=6,
+                     values=("1", "A", "a", "Ⅰ")).grid(row=2, column=1, sticky='w', pady=(6, 0))
+        ttk.Label(seq_frame, text="连接符：").grid(row=2, column=2, sticky='w', padx=(14, 4), pady=(6, 0))
+        ttk.Combobox(seq_frame, textvariable=seq_connector_var, width=6,
+                     values=("-", ".", "_", "、", " ")).grid(row=2, column=3, sticky='w', pady=(6, 0))
+
+        seq_start_var = tk.StringVar(value="1")
+        seq_pad_var = tk.StringVar(value="0")
+        seq_reset_per_dir = tk.BooleanVar(value=False)
+        ttk.Label(seq_frame, text="起始序号：").grid(row=3, column=0, sticky='w', pady=(6, 0))
+        ttk.Spinbox(seq_frame, from_=1, to=9999, width=6, textvariable=seq_start_var).grid(row=3, column=1, sticky='w', pady=(6, 0))
+        ttk.Label(seq_frame, text="补零位数：").grid(row=3, column=2, sticky='w', padx=(14, 4), pady=(6, 0))
+        ttk.Spinbox(seq_frame, from_=0, to=6, width=6, textvariable=seq_pad_var).grid(row=3, column=3, sticky='w', pady=(6, 0))
+        ttk.Checkbutton(seq_frame, text="每个目录重新从 1 开始（未勾选时整批连续编号）",
+                        variable=seq_reset_per_dir).grid(row=4, column=0, columnspan=4, sticky='w', pady=(6, 0))
+
         # 按钮框架 - 固定在底部
+        # 20261022 121500 修改：按钮行由 row=4 下移至 row=5，为新增的“重名时自动加序号”选项组（row=4）腾出位置
         button_frame = ttk.Frame(main_frame)
-        button_frame.grid(row=4, column=0, sticky='ew', pady=(12, 0))
+        button_frame.grid(row=5, column=0, sticky='ew', pady=(12, 0))
 
         def do_file_rename():
             find_pattern = find_var.get()
@@ -3789,6 +4417,16 @@ V1.1 功能：
             mode = match_mode.get()
             case_sens = case_sensitive.get()
             preview = preview_mode.get()
+            # 20261022 121500 新增：收集“重名时自动加序号”参数并传入执行器
+            num_options = {
+                'enabled': seq_enable.get(),
+                'position': seq_position.get(),
+                'num_type': seq_type_var.get(),
+                'connector': seq_connector_var.get(),
+                'start': seq_start_var.get(),
+                'pad_width': seq_pad_var.get(),
+                'reset_per_dir': seq_reset_per_dir.get(),
+            }
 
             if not find_pattern:
                 self._show_warning_message("警告", "请输入查找内容！")
@@ -3802,7 +4440,7 @@ V1.1 功能：
                     def confirm_cb():
                         preview_mode.set(False)
                         do_file_rename()
-                self.execute_advanced_rename(find_pattern, replace_text, mode, case_sens, preview, target_type, selected_paths, True, on_preview_confirm=confirm_cb)
+                self.execute_advanced_rename(find_pattern, replace_text, mode, case_sens, preview, target_type, selected_paths, True, on_preview_confirm=confirm_cb, num_options=num_options)  # 20261022 121500 修改：传入序号参数
                 if not preview:
                     dialog.destroy()
                     # 20260828 104445 执行完成后由任务结束回调按当前显示筛选刷新目录树以显示新文件名
@@ -3909,7 +4547,164 @@ V1.1 功能：
         except Exception as e:
             self._show_error_message("错误", f"导出重命名记录失败:\n{str(e)}")
 
-    def execute_advanced_rename(self, find_pattern, replace_text, mode, case_sensitive, preview_mode, target_type, selected_paths=None, glob_replace=False, on_preview_confirm=None):
+    def _apply_sequence_to_plans(self, plans, parent_path, num_options, is_directory):
+        """对 (旧名, 候选新名) 计划列表应用“重名时自动加序号”（20261022 123000 新增）
+
+        作用与目的：供本级目录字符替换、多维重命名本级目录/文件名等“计划列表型”功能复用；
+        仅当启用序号且批次存在重名（批次内重复或目标已被磁盘占用）时才改写候选新名，
+        未启用或无重名时原样返回，保持既有行为不变。
+        """
+        if not num_options or not num_options.get("enabled") or not plans:
+            return plans
+        entries = [
+            {'path': os.path.join(parent_path, old_name), 'new_name': new_name, 'is_directory': is_directory}
+            for old_name, new_name in plans
+        ]
+        planned_names = plan_batch_sequence(entries, num_options, exists_func=os.path.exists)
+        return [(old_name, planned_name) for (old_name, _), planned_name in zip(plans, planned_names)]
+
+    def _build_sequence_options_widget(self, parent):
+        """创建“重名时自动加序号”常驻选项组控件，返回 (选项组Frame, 参数收集函数)（20261022 123000 新增）
+
+        作用与目的：供本级目录字符替换、全部目录字符替换、多维重命名本级目录/文件名等
+        对话框复用，保持与“按位置/定界符改名”“名称修改”对话框一致的参数语义。
+        """
+        seq_frame = ttk.LabelFrame(parent, text="重名时自动加序号（可选，启用后仅在检测到重名时对全批加序号）", padding="8")
+
+        seq_enable = tk.BooleanVar(value=False)
+        ttk.Checkbutton(seq_frame, text="启用自动加序号", variable=seq_enable).grid(row=0, column=0, columnspan=2, sticky='w')
+
+        seq_position = tk.StringVar(value="prefix")
+        ttk.Label(seq_frame, text="序号位置：").grid(row=1, column=0, sticky='w', pady=(4, 0))
+        seq_position_frame = ttk.Frame(seq_frame)
+        seq_position_frame.grid(row=1, column=1, columnspan=3, sticky='w', pady=(4, 0))
+        ttk.Radiobutton(seq_position_frame, text="前置（序号+连接符）", value="prefix",
+                        variable=seq_position).pack(side=tk.LEFT, padx=(0, 12))
+        ttk.Radiobutton(seq_position_frame, text="后置（连接符+序号）", value="suffix",
+                        variable=seq_position).pack(side=tk.LEFT)
+
+        seq_type_var = tk.StringVar(value="1")
+        seq_connector_var = tk.StringVar(value="-")
+        ttk.Label(seq_frame, text="序号类型：").grid(row=2, column=0, sticky='w', pady=(4, 0))
+        ttk.Combobox(seq_frame, textvariable=seq_type_var, state='readonly', width=6,
+                     values=("1", "A", "a", "Ⅰ")).grid(row=2, column=1, sticky='w', pady=(4, 0))
+        ttk.Label(seq_frame, text="连接符：").grid(row=2, column=2, sticky='w', padx=(14, 4), pady=(4, 0))
+        ttk.Combobox(seq_frame, textvariable=seq_connector_var, width=6,
+                     values=("-", ".", "_", "、", " ")).grid(row=2, column=3, sticky='w', pady=(4, 0))
+
+        seq_start_var = tk.StringVar(value="1")
+        seq_pad_var = tk.StringVar(value="0")
+        seq_reset_per_dir = tk.BooleanVar(value=False)
+        ttk.Label(seq_frame, text="起始序号：").grid(row=3, column=0, sticky='w', pady=(4, 0))
+        ttk.Spinbox(seq_frame, from_=1, to=9999, width=6, textvariable=seq_start_var).grid(row=3, column=1, sticky='w', pady=(4, 0))
+        ttk.Label(seq_frame, text="补零位数：").grid(row=3, column=2, sticky='w', padx=(14, 4), pady=(4, 0))
+        ttk.Spinbox(seq_frame, from_=0, to=6, width=6, textvariable=seq_pad_var).grid(row=3, column=3, sticky='w', pady=(4, 0))
+        ttk.Checkbutton(seq_frame, text="每个目录重新从 1 开始（未勾选时整批连续编号）",
+                        variable=seq_reset_per_dir).grid(row=4, column=0, columnspan=4, sticky='w', pady=(4, 0))
+
+        def collect():
+            return {
+                'enabled': seq_enable.get(),
+                'position': seq_position.get(),
+                'num_type': seq_type_var.get(),
+                'connector': seq_connector_var.get(),
+                'start': seq_start_var.get(),
+                'pad_width': seq_pad_var.get(),
+                'reset_per_dir': seq_reset_per_dir.get(),
+            }
+
+        return seq_frame, collect
+
+    def _build_advanced_sequence_plan(self, match_item, source_dir, selected_paths, target_type, num_options):
+        """为高级重命名构建“重名时自动加序号”的只读预扫描计划（20261022 121500 新增）
+
+        作用与目的：在预览/执行前不改名的前提下收集全部匹配项，用 plan_batch_sequence 统一规划序号，
+        并处理“父目录改名后子项执行路径变化”的映射问题。
+        返回 (plan_by_old_path, plan_by_exec_key)：
+        - plan_by_old_path：normcase(原路径) -> 新名称，预览阶段查表；
+        - plan_by_exec_key：normcase(执行时路径) -> 新名称，执行阶段查表（已考虑父目录先改名的新路径）。
+        仅当启用序号时返回非空映射；未启用或无匹配项时返回两个空 dict（调用方保持原逻辑）。
+        """
+        candidates = []  # (原路径, 是否目录)
+        if selected_paths is not None:
+            for path in selected_paths:
+                if target_type == "file" and not os.path.isfile(path):
+                    continue
+                if target_type == "directory" and not os.path.isdir(path):
+                    continue
+                candidates.append((path, os.path.isdir(path)))
+        else:
+            # 递归模式：BFS 只读预扫描，顺序与执行遍历一致
+            queue = [source_dir]
+            while queue:
+                dir_path = queue.pop(0)
+                try:
+                    items = sorted(os.listdir(dir_path), key=lambda name: name.lower())
+                except (PermissionError, OSError):
+                    continue
+                for item in items:
+                    full_path = os.path.join(dir_path, item)
+                    is_dir = os.path.isdir(full_path)
+                    if target_type == "directory":
+                        if is_dir:
+                            candidates.append((full_path, True))
+                            queue.append(full_path)
+                    else:
+                        if is_dir:
+                            queue.append(full_path)
+                        else:
+                            candidates.append((full_path, False))
+
+        entries = []
+        for path, is_dir in candidates:
+            old_name = os.path.basename(path)
+            matched, new_name = match_item(old_name)
+            if matched and new_name and new_name != old_name:
+                entries.append({'path': path, 'new_name': new_name, 'is_directory': is_dir})
+        if not entries:
+            return {}, {}
+
+        planned_names = plan_batch_sequence(entries, num_options, exists_func=os.path.exists)
+        plan_by_old = {}
+        for entry, planned_name in zip(entries, planned_names):
+            if planned_name and planned_name != os.path.basename(entry['path']):
+                plan_by_old[os.path.normcase(entry['path'])] = planned_name
+
+        # 构建执行键映射：递归模式按 BFS 模拟“父目录先改名”，把计划名挂到执行时的实际路径上
+        plan_by_exec = {}
+        if selected_paths is not None:
+            # 已选路径模式：执行队列直接使用旧路径（目录模式按深度降序，先深层后浅层，旧路径始终有效）
+            plan_by_exec = dict(plan_by_old)
+        else:
+            planned_map = {os.path.normcase(entry['path']): name
+                           for entry, name in zip(entries, planned_names)}
+            current_of = {os.path.normcase(source_dir): source_dir}
+            queue = [source_dir]
+            while queue:
+                dir_path = queue.pop(0)
+                dir_current = current_of.get(os.path.normcase(dir_path), dir_path)
+                try:
+                    items = sorted(os.listdir(dir_path), key=lambda name: name.lower())
+                except (PermissionError, OSError):
+                    continue
+                for item in items:
+                    full_path = os.path.join(dir_path, item)
+                    is_dir = os.path.isdir(full_path)
+                    if target_type == "directory" and not is_dir:
+                        continue
+                    current_path = os.path.join(dir_current, item)
+                    planned_name = planned_map.get(os.path.normcase(full_path))
+                    if planned_name and planned_name != item:
+                        plan_by_exec[os.path.normcase(current_path)] = planned_name
+                    if is_dir:
+                        queue.append(full_path)
+                        if planned_name and planned_name != item:
+                            current_of[os.path.normcase(full_path)] = os.path.join(dir_current, planned_name)
+                        else:
+                            current_of[os.path.normcase(full_path)] = current_path
+        return plan_by_old, plan_by_exec
+
+    def execute_advanced_rename(self, find_pattern, replace_text, mode, case_sensitive, preview_mode, target_type, selected_paths=None, glob_replace=False, on_preview_confirm=None, num_options=None):
         """执行高级重命名操作"""
         # 20260828 104445 新增 selected_paths 参数：名称修改时仅处理已勾选的文件/目录；为 None 时保持原有递归遍历全部项目的行为（兼容原测试用例）
         # 20260828 104445 新增 glob_replace 参数：名称修改对话框的通配符模式使用直观替换语义
@@ -3927,6 +4722,12 @@ V1.1 功能：
         selected_files_mode = (target_type == "file" and selected_paths is not None)
         selected_dirs_mode = (target_type == "directory" and selected_paths is not None)  # 20260906 184352 新增已选目录模式
         selected_mode = selected_files_mode or selected_dirs_mode  # 20260906 184352 已选路径模式（文件或目录）
+
+        # 20261022 121500 新增：启用“重名时自动加序号”时先做只读预扫描，统一规划序号（预览用 plan_by_old，执行用 plan_by_exec）
+        plan_by_old, plan_by_exec = {}, {}
+        if num_options and num_options.get("enabled"):
+            plan_by_old, plan_by_exec = self._build_advanced_sequence_plan(
+                match_item, self.source_dir.get(), selected_paths, target_type, num_options)
         def process_directory(path):
             # 20260828 111834 清理死代码：本函数仅在预览模式下调用，原非预览分支与冗余判断已移除
             try:
@@ -3944,7 +4745,11 @@ V1.1 功能：
                         process_directory(full_path)
                         continue
 
-                    match_found, new_name = match_item(item)
+                    if plan_by_old:  # 20261022 121500 新增：启用序号规划时以计划名为准
+                        new_name = plan_by_old.get(os.path.normcase(full_path))
+                        match_found = new_name is not None
+                    else:
+                        match_found, new_name = match_item(item)
 
                     if match_found and new_name != item:
                         item_label = "目录" if is_dir else "文件"
@@ -3989,7 +4794,11 @@ V1.1 功能：
                     if target_type == "directory" and not is_dir:
                         continue
                     item = os.path.basename(full_path)
-                    match_found, new_name = match_item(item)
+                    if plan_by_old:  # 20261022 121500 新增：启用序号规划时以计划名为准
+                        new_name = plan_by_old.get(os.path.normcase(full_path))
+                        match_found = new_name is not None
+                    else:
+                        match_found, new_name = match_item(item)
                     if match_found and new_name != item:
                         item_label = "目录" if is_dir else "文件"
                         try:
@@ -4042,7 +4851,11 @@ V1.1 功能：
                     if target_type == "directory" and not is_dir:
                         return ("processed", [])
                     item = os.path.basename(full_path)
-                    match_found, new_name = match_item(item)
+                    if plan_by_exec:  # 20261022 121500 新增：启用序号规划时以执行计划为准
+                        new_name = plan_by_exec.get(os.path.normcase(full_path))
+                        match_found = new_name is not None
+                    else:
+                        match_found, new_name = match_item(item)
                     if match_found and new_name != item:
                         counters["matched"] += 1
                         item_label = "目录" if is_dir else "文件"
@@ -4089,7 +4902,11 @@ V1.1 功能：
                     new_dirs.append(full_path)
                     continue
 
-                match_found, new_name = match_item(item)
+                if plan_by_exec:  # 20261022 121500 新增：启用序号规划时按“父目录已改名后的执行路径”查计划表
+                    new_name = plan_by_exec.get(os.path.normcase(os.path.join(dir_path, item)))
+                    match_found = new_name is not None
+                else:
+                    match_found, new_name = match_item(item)
                 if match_found and new_name != item:
                     counters["matched"] += 1
                     item_label = "目录" if is_dir else "文件"
@@ -4176,15 +4993,15 @@ V1.1 功能：
         """
         preview_dialog = tk.Toplevel(self.root)
         preview_dialog.title("预览重命名结果")
-        preview_dialog.geometry("700x400")
+        preview_dialog.geometry("1300x670")  # 20261022 145000 修改：默认宽度 900→1300，让列表内容显示更全
         
         # 设置对话框位置
         preview_dialog.update_idletasks()
         screen_width = preview_dialog.winfo_screenwidth()
-        dialog_width = 700
+        dialog_width = 1300
         x = (screen_width - dialog_width) // 2
         y = 80
-        preview_dialog.geometry(f"{dialog_width}x400+{x}+{y}")
+        preview_dialog.geometry(f"{dialog_width}x670+{x}+{y}")
         
         preview_dialog.transient(self.root)
         preview_dialog.grab_set()
@@ -4225,18 +5042,19 @@ V1.1 功能：
         tree_frame = ttk.Frame(main_frame)
         tree_frame.pack(fill=tk.BOTH, expand=True)
         
-        preview_tree = ttk.Treeview(tree_frame, columns=("type", "old_name", "new_name", "status", "relative_path"), show="headings")
+        preview_tree = ttk.Treeview(tree_frame, columns=("type", "old_name", "new_name", "status", "relative_path"), show="headings", height=15)  # 20261022 144500 修改：添加 height=15，使预览列表请求更多高度，避免窗口扩大后内容区域仍显矮小
         preview_tree.heading("type", text="类型")
         preview_tree.heading("old_name", text="原名称")
         preview_tree.heading("new_name", text="新名称")
         preview_tree.heading("status", text="执行结果")
         preview_tree.heading("relative_path", text="路径")
         
-        preview_tree.column("type", width=80)
-        preview_tree.column("old_name", width=150)
-        preview_tree.column("new_name", width=150)
-        preview_tree.column("status", width=200)
-        preview_tree.column("relative_path", width=320)
+        # 20261022 145000 修改：预览列宽大幅增加，配合窗口 900 宽度，让列表内容显示更全
+        preview_tree.column("type", width=100)
+        preview_tree.column("old_name", width=220)
+        preview_tree.column("new_name", width=220)
+        preview_tree.column("status", width=250)
+        preview_tree.column("relative_path", width=450)
         
         # 添加滚动条
         v_scrollbar = ttk.Scrollbar(tree_frame, orient="vertical", command=preview_tree.yview)
@@ -4407,8 +5225,9 @@ V1.1 功能：
         preview_dialog.update_idletasks()
         req_width = main_frame.winfo_reqwidth() + 30
         req_height = main_frame.winfo_reqheight() + 30
-        dialog_width = max(700, min(req_width, preview_dialog.winfo_screenwidth() - 100))
-        dialog_height = max(450, min(req_height, int(preview_dialog.winfo_screenheight() * 0.8)))
+        # 20261022 145000 修改：动态尺寸下限由 900x670 提高到 1300x670，与初始默认一致
+        dialog_width = max(1300, min(req_width, preview_dialog.winfo_screenwidth() - 100))
+        dialog_height = max(670, min(req_height, int(preview_dialog.winfo_screenheight() * 0.8)))
         x = (preview_dialog.winfo_screenwidth() - dialog_width) // 2
         y = max(50, (preview_dialog.winfo_screenheight() - dialog_height) // 3)
         preview_dialog.geometry(f"{dialog_width}x{dialog_height}+{x}+{y}")
